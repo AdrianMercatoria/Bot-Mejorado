@@ -1,0 +1,662 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Preview Bot Mejorado</title>
+  <style>
+    :root {
+      --bg: #f8f7f4;
+      --ink: #1f1f1f;
+      --muted: #666;
+      --card: #ffffff;
+      --line: #ddd;
+      --primary: #14532d;
+      --primary-2: #166534;
+      --danger: #991b1b;
+      --warn: #92400e;
+      --accent: #0f766e;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 10% 10%, #f0fdf4 0%, transparent 45%),
+        radial-gradient(circle at 90% 0%, #ecfeff 0%, transparent 35%),
+        var(--bg);
+      min-height: 100vh;
+    }
+
+    .wrap {
+      max-width: 1060px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: clamp(1.5rem, 2.5vw, 2rem);
+    }
+
+    .sub {
+      margin: 0 0 20px;
+      color: var(--muted);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 16px;
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 14px;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.04);
+    }
+
+    .card h2 {
+      margin: 0 0 10px;
+      font-size: 1.08rem;
+    }
+
+    .status {
+      font-weight: 600;
+      margin: 8px 0 10px;
+    }
+
+    .status.ok { color: var(--primary); }
+    .status.warn { color: var(--warn); }
+    .status.run { color: var(--accent); }
+
+    .row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 8px 0;
+    }
+
+    button {
+      border: 0;
+      border-radius: 10px;
+      padding: 8px 12px;
+      font-weight: 600;
+      cursor: pointer;
+      background: #f0f0f0;
+    }
+
+    select {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 8px 10px;
+      min-width: 160px;
+      background: #fff;
+      color: var(--ink);
+      font-weight: 600;
+    }
+
+    input[type="number"] {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 8px 10px;
+      min-width: 120px;
+      background: #fff;
+      color: var(--ink);
+      font-weight: 600;
+    }
+
+    button.primary { background: var(--primary); color: #fff; }
+    button.secondary { background: #4b5563; color: #fff; }
+    button.success { background: var(--primary-2); color: #fff; }
+    button.danger { background: var(--danger); color: #fff; }
+    button.accent { background: var(--accent); color: #fff; }
+
+    button:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+
+    .console {
+      margin-top: 18px;
+      background: #0d1117;
+      color: #d1d5db;
+      border-radius: 12px;
+      border: 1px solid #1f2937;
+      padding: 12px;
+      min-height: 180px;
+      max-height: 280px;
+      overflow: auto;
+      font-family: Consolas, Monaco, monospace;
+      font-size: 12px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+    }
+
+    .muted {
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    .hl { font-weight: 700; }
+
+    @media (max-width: 640px) {
+      .wrap { padding: 14px; }
+      .card { padding: 12px; }
+      button { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <h1>Verificacion Visual: Bot Mejorado</h1>
+    <p class="sub">Simulacion local de paneles y botones antes de usar Discord real.</p>
+
+    <section class="grid">
+      <article class="card" id="mt-card">
+        <h2>Maritimo / Terrestre</h2>
+        <p class="muted">Flujo: seleccionar tarea > enviar evidencia > validacion automatica.</p>
+        <div class="row">
+          <button class="primary" data-mt="maritimo:24">Maritimo (24h)</button>
+          <button class="success" data-mt="terrestre:8">Terrestre (8h)</button>
+        </div>
+        <p id="mt-status" class="status">Sin tarea pendiente</p>
+        <div class="row">
+          <button id="mt-evidence" class="accent" disabled>Subir evidencia (simulada)</button>
+        </div>
+      </article>
+
+      <article class="card" id="runs-card">
+        <h2>RUNS</h2>
+        <p class="status run" id="runs-status">Estado: DISPONIBLE</p>
+        <div class="row">
+          <button id="runs-start" class="success">Iniciar</button>
+          <button id="runs-finish" class="danger" disabled>Terminar</button>
+        </div>
+        <p class="muted" id="assignment-status"></p>
+        <div class="row">
+          <label for="assign-mt" class="muted">Maritimo/Terrestre:</label>
+          <select id="assign-mt">
+            <option value="#main">#main</option>
+            <option value="#misiones">#misiones</option>
+            <option value="#tareas">#tareas</option>
+          </select>
+        </div>
+        <div class="row">
+          <label for="assign-runs" class="muted">RUNS:</label>
+          <select id="assign-runs">
+            <option value="#main">#main</option>
+            <option value="#runs">#runs</option>
+            <option value="#alertas">#alertas</option>
+          </select>
+        </div>
+        <div class="row">
+          <label for="assign-plant" class="muted">Plantacion:</label>
+          <select id="assign-plant">
+            <option value="#main">#main</option>
+            <option value="#plantacion">#plantacion</option>
+            <option value="#siembra">#siembra</option>
+          </select>
+        </div>
+        <div class="row">
+          <button id="main-estado" class="secondary">Ver estado (Main)</button>
+          <button id="main-canales" class="secondary">Ver canales (Main)</button>
+          <button id="main-plant-panel" class="secondary">Recrear panel Plantacion</button>
+          <button id="main-recreate-all" class="secondary">Recrear todo</button>
+        </div>
+        <p class="muted">CD real: 4h (demo visual usa contador acelerado de 40s).</p>
+      </article>
+
+      <article class="card" id="plant-card">
+        <h2>Plantacion</h2>
+        <p class="muted">Ramas: 2 ciclos de 3h (opcion de ciclo extra). Duplicado: 1 ciclo de 3h.</p>
+        <div class="row">
+          <button id="plant-ramas" class="success">Ramas</button>
+          <button id="plant-duplicado" class="primary">Duplicado</button>
+        </div>
+        <div class="row">
+          <label for="plant-seeds" class="muted">Semillas:</label>
+          <input id="plant-seeds" type="number" min="1" placeholder="Cantidad" />
+          <button id="plant-start" class="accent" disabled>Iniciar plantacion</button>
+        </div>
+        <p id="plant-status" class="status">Sin plantacion activa</p>
+        <div class="row">
+          <button id="plant-cycle" class="primary" disabled>Marcar ciclo</button>
+          <button id="plant-add4" class="success" disabled>Agregar ciclo extra</button>
+          <button id="plant-finish3" class="secondary" disabled>Finalizar sin extra</button>
+        </div>
+      </article>
+    </section>
+
+    <section class="card" style="margin-top: 16px; display: none;" id="main-status-card">
+      <h2>Resumen Main</h2>
+      <p class="muted">Muestra quien hizo maritimo/terrestre y cuantos iniciaron RUNS.</p>
+      <div id="main-status" class="console" style="margin-top: 8px; min-height: 120px; max-height: 220px;"></div>
+    </section>
+
+    <section class="console" id="log"></section>
+  </main>
+
+  <script>
+    const log = document.getElementById('log');
+    const now = () => new Date().toLocaleTimeString();
+    const write = (line) => {
+      log.textContent += `[${now()}] ${line}\n`;
+      log.scrollTop = log.scrollHeight;
+    };
+
+    const mtStatus = document.getElementById('mt-status');
+    const mtEvidence = document.getElementById('mt-evidence');
+    const runsStatus = document.getElementById('runs-status');
+    const runsStart = document.getElementById('runs-start');
+    const runsFinish = document.getElementById('runs-finish');
+    const assignmentStatus = document.getElementById('assignment-status');
+    const assignMt = document.getElementById('assign-mt');
+    const assignRuns = document.getElementById('assign-runs');
+    const assignPlant = document.getElementById('assign-plant');
+    const mainStatusCard = document.getElementById('main-status-card');
+    const mainStatus = document.getElementById('main-status');
+    const plantStatus = document.getElementById('plant-status');
+    const plantSeeds = document.getElementById('plant-seeds');
+    const plantStart = document.getElementById('plant-start');
+    const plantCycle = document.getElementById('plant-cycle');
+    const plantAdd4 = document.getElementById('plant-add4');
+    const plantFinish3 = document.getElementById('plant-finish3');
+
+    const channelAssignments = {
+      maritimo_terrestre: '#main',
+      runs: '#main',
+      plantacion: '#main'
+    };
+
+    let mtState;
+    let runs;
+    let plant;
+    let stats;
+
+    function getRandomUser() {
+      return `user_${Math.floor(Math.random() * 5) + 1}`;
+    }
+
+    function initState() {
+      mtState = { selected: null, activeType: null, cooldownUntil: null };
+      runs = { status: 'available', cdUntil: null };
+      plant = {
+        selectedType: null,
+        seeds: 0,
+        user: null,
+        active: false,
+        completedCycles: 0,
+        totalCycles: 0,
+        awaitingFourthDecision: false,
+        nextCycleAt: null,
+        cycleReadyNotified: false
+      };
+      stats = {
+        mtHistory: [],
+        runsStarts: [],
+        runsFinishes: [],
+        plantationStarts: [],
+        plantationFinishes: []
+      };
+    }
+
+    function renderAssignments() {
+      assignmentStatus.textContent =
+        `Canales: MT -> ${channelAssignments.maritimo_terrestre} | ` +
+        `RUNS -> ${channelAssignments.runs} | ` +
+        `Plantacion -> ${channelAssignments.plantacion}`;
+    }
+
+    function renderMt() {
+      if (mtState.cooldownUntil && mtState.activeType) {
+        const left = Math.max(0, Math.ceil((mtState.cooldownUntil - Date.now()) / 1000));
+        mtStatus.className = 'status warn';
+        mtStatus.textContent = `CD activo ${mtState.activeType} - demo ${left}s`;
+        if (left <= 0) {
+          const doneType = mtState.activeType;
+          mtState.activeType = null;
+          mtState.cooldownUntil = null;
+          mtStatus.className = 'status ok';
+          mtStatus.textContent = `${doneType} disponible nuevamente`;
+          write(`DM a usuario: tu CD de ${doneType} termino.`);
+          write(`${channelAssignments.maritimo_terrestre}: ${doneType} disponible para el usuario.`);
+        }
+        return;
+      }
+
+      if (mtState.selected) {
+        mtStatus.className = 'status run';
+        mtStatus.textContent = `Pendiente evidencia para ${mtState.selected.replace(':', ' / CD ')}h`;
+        return;
+      }
+
+      mtStatus.className = 'status';
+      mtStatus.textContent = 'Sin tarea pendiente';
+    }
+
+    function renderRuns() {
+      if (runs.status === 'available') {
+        runsStatus.textContent = 'Estado: DISPONIBLE';
+        runsStatus.className = 'status run';
+        runsStart.disabled = false;
+        runsFinish.disabled = true;
+        return;
+      }
+      if (runs.status === 'in_progress') {
+        runsStatus.textContent = 'Estado: EN PROGRESO';
+        runsStatus.className = 'status warn';
+        runsStart.disabled = true;
+        runsFinish.disabled = false;
+        return;
+      }
+
+      const left = Math.max(0, Math.ceil((runs.cdUntil - Date.now()) / 1000));
+      runsStatus.textContent = `Estado: EN CD (4h) - demo ${left}s`;
+      runsStatus.className = 'status';
+      runsStart.disabled = true;
+      runsFinish.disabled = true;
+
+      if (left <= 0) {
+        runs.status = 'available';
+        runs.cdUntil = null;
+        write(`${channelAssignments.runs}: @everyone RUNS disponible nuevamente.`);
+        renderRuns();
+      }
+    }
+
+    function renderPlant() {
+      const canStart = !!plant.selectedType && Number(plantSeeds.value) > 0 && !plant.active;
+      plantStart.disabled = !canStart;
+
+      if (!plant.active) {
+        plantStatus.className = 'status';
+        plantStatus.textContent = 'Sin plantacion activa';
+        plantCycle.disabled = true;
+        plantAdd4.disabled = true;
+        plantFinish3.disabled = true;
+        return;
+      }
+
+      if (plant.awaitingFourthDecision) {
+        plantStatus.className = 'status warn';
+        plantStatus.textContent =
+          `Plantacion ${plant.selectedType} de ${plant.user}: 2/2 cumplidos. Deseas ciclo extra?`;
+        plantCycle.disabled = true;
+        plantAdd4.disabled = false;
+        plantFinish3.disabled = false;
+        return;
+      }
+
+      const left = Math.max(0, Math.ceil((plant.nextCycleAt - Date.now()) / 1000));
+      const nextCycle = plant.completedCycles + 1;
+      plantStatus.className = 'status run';
+      plantStatus.textContent =
+        `Plantacion ${plant.selectedType} de ${plant.user}: ciclo ${nextCycle}/${plant.totalCycles} ` +
+        `(${left}s demo)`;
+      plantCycle.disabled = left > 0;
+      plantAdd4.disabled = true;
+      plantFinish3.disabled = true;
+    }
+
+    function showMainEstado() {
+      const mtMaritimo = stats.mtHistory.filter((x) => x.type === 'maritimo');
+      const mtTerrestre = stats.mtHistory.filter((x) => x.type === 'terrestre');
+      const runsUsers = new Set(stats.runsStarts.map((x) => x.user));
+      const lastMaritimo = mtMaritimo[mtMaritimo.length - 1] || null;
+      const lastTerrestre = mtTerrestre[mtTerrestre.length - 1] || null;
+      const activePlant =
+        plant.active
+          ? `${plant.selectedType} | semillas ${plant.seeds} | ${plant.completedCycles}/${plant.totalCycles}`
+          : 'Ninguna';
+
+      const lines = [];
+      lines.push('## Estado General (Demo Main)');
+      lines.push('Canales de respuesta:');
+      lines.push(`- Maritimo/Terrestre -> ${channelAssignments.maritimo_terrestre}`);
+      lines.push(`- RUNS -> ${channelAssignments.runs}`);
+      lines.push(`- Plantacion -> ${channelAssignments.plantacion}`);
+      lines.push('');
+      lines.push(`RUNS iniciadas (total): ${stats.runsStarts.length}`);
+      lines.push(`RUNS finalizadas (total): ${stats.runsFinishes.length}`);
+      lines.push(`Usuarios que iniciaron RUNS: ${runsUsers.size}`);
+      lines.push(`Maritimo completado: ${mtMaritimo.length}`);
+      lines.push(`Terrestre completado: ${mtTerrestre.length}`);
+      lines.push(`Ultimo Maritimo terminado por: ${lastMaritimo ? lastMaritimo.user : 'Sin registros'}`);
+      lines.push(`Ultimo Terrestre terminado por: ${lastTerrestre ? lastTerrestre.user : 'Sin registros'}`);
+      lines.push(`Plantacion iniciadas: ${stats.plantationStarts.length}`);
+      lines.push(`Plantacion finalizadas: ${stats.plantationFinishes.length}`);
+      lines.push(`Plantacion activa: ${activePlant}`);
+
+      mainStatus.textContent = lines.join('\n');
+      mainStatusCard.style.display = 'block';
+    }
+
+    function recreatePlantPanel() {
+      write(`${channelAssignments.plantacion}: panel de Plantacion recreado.`);
+      write(`${channelAssignments.plantacion}: botones disponibles -> Ramas | Duplicado`);
+    }
+
+    function recreateAllDemo() {
+      initState();
+      plantSeeds.value = '';
+      renderAssignments();
+      renderMt();
+      renderRuns();
+      renderPlant();
+      write('Main: recreacion total ejecutada (paneles y estado demo reiniciados).');
+      recreatePlantPanel();
+    }
+
+    document.querySelectorAll('[data-mt]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const type = btn.dataset.mt.split(':')[0];
+        if (mtState.activeType === type && mtState.cooldownUntil && mtState.cooldownUntil > Date.now()) {
+          const left = Math.ceil((mtState.cooldownUntil - Date.now()) / 1000);
+          write(`Bloqueado: ${type} sigue en CD (${left}s demo).`);
+          return;
+        }
+        mtState.selected = btn.dataset.mt;
+        mtEvidence.disabled = false;
+        write(`Maritimo/Terrestre seleccionado: ${mtState.selected}`);
+        renderMt();
+      });
+    });
+
+    mtEvidence.addEventListener('click', () => {
+      if (!mtState.selected) return;
+      const [type, hours] = mtState.selected.split(':');
+      const simulatedUser = getRandomUser();
+      const demoSeconds = hours === '8' ? 20 : 35;
+      mtState.activeType = type;
+      mtState.cooldownUntil = Date.now() + demoSeconds * 1000;
+      stats.mtHistory.push({ user: simulatedUser, type, hours: Number(hours), at: Date.now() });
+      write(`Evidencia simulada detectada y validada para ${mtState.selected}.`);
+      write(`${channelAssignments.maritimo_terrestre}: ${simulatedUser} hizo ${type} (${hours}h).`);
+      mtEvidence.disabled = true;
+      mtState.selected = null;
+      renderMt();
+    });
+
+    runsStart.addEventListener('click', () => {
+      const simulatedUser = getRandomUser();
+      runs.status = 'in_progress';
+      stats.runsStarts.push({ user: simulatedUser, at: Date.now() });
+      write('RUNS iniciada.');
+      write(`${channelAssignments.runs}: ${simulatedUser} inicio una RUNS.`);
+      renderRuns();
+    });
+
+    runsFinish.addEventListener('click', () => {
+      const simulatedUser = getRandomUser();
+      runs.status = 'cooldown';
+      runs.cdUntil = Date.now() + 40 * 1000;
+      stats.runsFinishes.push({ user: simulatedUser, at: Date.now() });
+      write('RUNS terminada. CD iniciado (demo 40s).');
+      write(`${channelAssignments.runs}: ${simulatedUser} finalizo una RUNS.`);
+      renderRuns();
+    });
+
+    document.getElementById('plant-ramas').addEventListener('click', () => {
+      plant.selectedType = 'ramas';
+      write('Plantacion seleccionada: ramas');
+      renderPlant();
+    });
+
+    document.getElementById('plant-duplicado').addEventListener('click', () => {
+      plant.selectedType = 'duplicado';
+      write('Plantacion seleccionada: duplicado');
+      renderPlant();
+    });
+
+    plantSeeds.addEventListener('input', renderPlant);
+
+    plantStart.addEventListener('click', () => {
+      const seeds = Number.parseInt(plantSeeds.value, 10);
+      if (!Number.isFinite(seeds) || seeds <= 0 || !plant.selectedType || plant.active) return;
+
+      plant.active = true;
+      plant.user = getRandomUser();
+      plant.seeds = seeds;
+      plant.totalCycles = plant.selectedType === 'ramas' ? 2 : 1;
+      plant.completedCycles = 0;
+      plant.awaitingFourthDecision = false;
+      plant.nextCycleAt = Date.now() + 25 * 1000;
+      plant.cycleReadyNotified = false;
+      stats.plantationStarts.push({ user: plant.user, type: plant.selectedType, seeds, at: Date.now() });
+
+      write(`${channelAssignments.plantacion}: ${plant.user} inicio ${plant.selectedType} con ${seeds} semillas.`);
+      write(`${channelAssignments.plantacion}: ciclo 1/${plant.totalCycles} en progreso (demo 25s).`);
+      renderPlant();
+    });
+
+    plantCycle.addEventListener('click', () => {
+      if (!plant.active || plant.awaitingFourthDecision) return;
+      if (Date.now() < plant.nextCycleAt) return;
+
+      plant.completedCycles += 1;
+      write(`${channelAssignments.plantacion}: ${plant.user} marco ciclo ${plant.completedCycles}/${plant.totalCycles}.`);
+
+      if (plant.completedCycles >= plant.totalCycles) {
+        if (plant.selectedType === 'ramas' && plant.totalCycles === 2) {
+          plant.awaitingFourthDecision = true;
+          plant.nextCycleAt = null;
+          write(`${channelAssignments.plantacion}: ${plant.user} completo 2/2. Desea ciclo extra?`);
+        } else {
+          stats.plantationFinishes.push({ user: plant.user, type: plant.selectedType, seeds: plant.seeds, at: Date.now() });
+          write(`${channelAssignments.plantacion}: ${plant.user} completo plantacion ${plant.selectedType}.`);
+          plant.active = false;
+          plant.selectedType = null;
+          plant.user = null;
+          plant.seeds = 0;
+          plant.totalCycles = 0;
+          plant.completedCycles = 0;
+          plant.awaitingFourthDecision = false;
+          plant.nextCycleAt = null;
+          plantSeeds.value = '';
+        }
+      } else {
+        plant.nextCycleAt = Date.now() + 25 * 1000;
+        plant.cycleReadyNotified = false;
+      }
+
+      renderPlant();
+    });
+
+    plantAdd4.addEventListener('click', () => {
+      if (!plant.active || !plant.awaitingFourthDecision) return;
+      plant.totalCycles = 3;
+      plant.awaitingFourthDecision = false;
+      plant.nextCycleAt = Date.now() + 25 * 1000;
+      plant.cycleReadyNotified = false;
+      write(`${channelAssignments.plantacion}: ${plant.user} agrego ciclo extra.`);
+      renderPlant();
+    });
+
+    plantFinish3.addEventListener('click', () => {
+      if (!plant.active || !plant.awaitingFourthDecision) return;
+      stats.plantationFinishes.push({ user: plant.user, type: plant.selectedType, seeds: plant.seeds, at: Date.now() });
+      write(`${channelAssignments.plantacion}: ${plant.user} finalizo sin ciclo extra.`);
+      plant.active = false;
+      plant.selectedType = null;
+      plant.user = null;
+      plant.seeds = 0;
+      plant.totalCycles = 0;
+      plant.completedCycles = 0;
+      plant.awaitingFourthDecision = false;
+      plant.nextCycleAt = null;
+      plantSeeds.value = '';
+      renderPlant();
+    });
+
+    assignMt.addEventListener('change', () => {
+      channelAssignments.maritimo_terrestre = assignMt.value;
+      renderAssignments();
+      write(`Asignacion actualizada: Maritimo/Terrestre -> ${assignMt.value}`);
+    });
+
+    assignRuns.addEventListener('change', () => {
+      channelAssignments.runs = assignRuns.value;
+      renderAssignments();
+      write(`Asignacion actualizada: RUNS -> ${assignRuns.value}`);
+    });
+
+    assignPlant.addEventListener('change', () => {
+      channelAssignments.plantacion = assignPlant.value;
+      renderAssignments();
+      write(`Asignacion actualizada: Plantacion -> ${assignPlant.value}`);
+    });
+
+    document.getElementById('main-estado').addEventListener('click', () => {
+      showMainEstado();
+      write('Boton Main > Ver estado ejecutado.');
+    });
+
+    document.getElementById('main-canales').addEventListener('click', () => {
+      const lines = [
+        '## Canales de respuesta (Demo Main)',
+        `- Maritimo/Terrestre -> ${channelAssignments.maritimo_terrestre}`,
+        `- RUNS -> ${channelAssignments.runs}`,
+        `- Plantacion -> ${channelAssignments.plantacion}`
+      ];
+      mainStatus.textContent = lines.join('\n');
+      mainStatusCard.style.display = 'block';
+      write('Boton Main > Ver canales ejecutado.');
+    });
+
+    document.getElementById('main-plant-panel').addEventListener('click', () => {
+      recreatePlantPanel();
+      write('Boton Main > Recrear panel Plantacion ejecutado.');
+    });
+
+    document.getElementById('main-recreate-all').addEventListener('click', () => {
+      recreateAllDemo();
+    });
+
+    setInterval(() => {
+      if (runs.status === 'cooldown') renderRuns();
+
+      if (plant.active && !plant.awaitingFourthDecision && plant.nextCycleAt && Date.now() >= plant.nextCycleAt && !plant.cycleReadyNotified) {
+        const nextCycle = plant.completedCycles + 1;
+        write(`${channelAssignments.plantacion}: ${plant.user} ya puede marcar ciclo ${nextCycle}/${plant.totalCycles}.`);
+        plant.cycleReadyNotified = true;
+      }
+
+      renderMt();
+      renderPlant();
+    }, 1000);
+
+    initState();
+    renderAssignments();
+    renderMt();
+    renderRuns();
+    renderPlant();
+    write('Preview cargado con flujo completo. Puedes recrear todo desde Main.');
+  </script>
+</body>
+</html>
