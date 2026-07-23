@@ -66,7 +66,7 @@ const commands = [
         .setDescription('Tarea a configurar')
         .setRequired(true)
         .addChoices(
-          { name: 'Maritimo/Terrestre', value: 'maritimo_terrestre' },
+          { name: 'Maritimo/Terrestre', value: 'maritimo-terrestre' },
           { name: 'RUNS', value: 'runs' },
           { name: 'Plantacion', value: 'plantacion' }
         )
@@ -83,12 +83,23 @@ const commands = [
 const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
 
 async function registerCommands() {
-  if (GUILD_ID) {
-    await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
-    console.log(`[OK] Slash commands registrados por servidor (GUILD_ID: ${GUILD_ID}) — disponibles de inmediato.`);
-  } else {
-    await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
-    console.log('[OK] Slash commands registrados globalmente — pueden tardar hasta 1 hora en propagarse.');
+  try {
+    if (GUILD_ID) {
+      await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
+      console.log(`[OK] Slash commands registrados por servidor (GUILD_ID: ${GUILD_ID}) — disponibles de inmediato.`);
+    } else {
+      await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
+      console.log('[OK] Slash commands registrados globalmente — pueden tardar hasta 1 hora en propagarse.');
+    }
+  } catch (error) {
+    console.error('[ERROR] Fallo registrando comandos:', error.message || error);
+    if (error?.rawError) {
+      console.error('[ERROR] Detalle del error de Discord API:', JSON.stringify(error.rawError, null, 2));
+    }
+    if (error?.status) {
+      console.error('[ERROR] HTTP status:', error.status);
+    }
+    throw error;
   }
 }
 
@@ -194,7 +205,7 @@ function buildMainStatusButtons() {
 }
 
 function getTaskChannelId(guildConfig, taskKey) {
-  if (taskKey === 'maritimo_terrestre') {
+  if (taskKey === 'maritimo-terrestre') {
     return guildConfig.maritimeTerrestrialChannelId || guildConfig.mainChannelId || null;
   }
   if (taskKey === 'runs') {
@@ -211,7 +222,7 @@ function formatAssignedChannel(channelId) {
 }
 
 function buildChannelAssignmentText(guildConfig) {
-  const mtChannelId = getTaskChannelId(guildConfig, 'maritimo_terrestre');
+  const mtChannelId = getTaskChannelId(guildConfig, 'maritimo-terrestre');
   const runsChannelId = getTaskChannelId(guildConfig, 'runs');
   const plantationChannelId = getTaskChannelId(guildConfig, 'plantacion');
 
@@ -441,7 +452,7 @@ async function notifyMain(guild, guildConfig, text) {
 }
 
 async function notifyMaritimeTerrestrialChannel(guild, guildConfig, text) {
-  const channelId = getTaskChannelId(guildConfig, 'maritimo_terrestre');
+  const channelId = getTaskChannelId(guildConfig, 'maritimo-terrestre');
   if (!channelId) return;
   const channel = await guild.channels.fetch(channelId).catch(() => null);
   if (!channel || channel.type !== ChannelType.GuildText) return;
@@ -1134,7 +1145,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const taskKey = interaction.options.getString('tarea', true);
       const targetChannel = interaction.options.getChannel('canal', true);
 
-      if (taskKey === 'maritimo_terrestre') {
+      if (taskKey === 'maritimo-terrestre') {
         guildConfig.maritimeTerrestrialChannelId = targetChannel.id;
       } else if (taskKey === 'runs') {
         guildConfig.runsChannelId = targetChannel.id;
