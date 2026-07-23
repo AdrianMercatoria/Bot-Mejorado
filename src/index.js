@@ -18,10 +18,27 @@ const { addHours, formatDuration } = require('./time');
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
+const GUILD_ID = process.env.GUILD_ID;
 
-if (!DISCORD_TOKEN || !CLIENT_ID) {
-  console.error('Faltan variables de entorno: DISCORD_TOKEN y/o CLIENT_ID');
+const missingVars = [];
+if (!DISCORD_TOKEN) missingVars.push('DISCORD_TOKEN');
+if (!CLIENT_ID) missingVars.push('CLIENT_ID');
+
+if (missingVars.length > 0) {
+  console.error(
+    `\n[ERROR] Faltan las siguientes variables de entorno obligatorias:\n` +
+    missingVars.map((v) => `  - ${v}`).join('\n') +
+    `\n\nCrea un archivo .env en la raíz del proyecto (básate en .env.example) y completa los valores.\nEl bot no puede iniciar sin estas variables.\n`
+  );
   process.exit(1);
+}
+
+if (!GUILD_ID) {
+  console.warn(
+    '[AVISO] GUILD_ID no está configurado. Los slash commands se registrarán de forma global.\n' +
+    '        La propagación global puede tardar hasta 1 hora en reflejarse en Discord.\n' +
+    '        Para pruebas rápidas, agrega GUILD_ID=<id_de_tu_servidor> en tu .env\n'
+  );
 }
 
 const client = new Client({
@@ -66,8 +83,13 @@ const commands = [
 const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
 
 async function registerCommands() {
-  await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
-  console.log('Slash commands registrados');
+  if (GUILD_ID) {
+    await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
+    console.log(`[OK] Slash commands registrados por servidor (GUILD_ID: ${GUILD_ID}) — disponibles de inmediato.`);
+  } else {
+    await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
+    console.log('[OK] Slash commands registrados globalmente — pueden tardar hasta 1 hora en propagarse.');
+  }
 }
 
 function getGuildState(state, guildId) {
@@ -1205,7 +1227,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 });
 
 client.once(Events.ClientReady, async (readyClient) => {
-  console.log(`Conectado como ${readyClient.user.tag}`);
+  console.log(`[OK] Bot conectado como ${readyClient.user.tag} (${readyClient.user.id})`);
   setInterval(() => {
     schedulerTick().catch((err) => console.error('Scheduler error:', err));
   }, 30 * 1000);
