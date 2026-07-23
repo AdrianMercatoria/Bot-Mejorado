@@ -1225,17 +1225,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
         writeState(state);
       } catch (e) {
-        console.error('[ERROR] No se pudo publicar el panel en el canal asignado:', e);
+        console.error(`[ERROR] No se pudo publicar el panel ${taskKey} en el canal asignado:`, e);
         await interaction.reply({
           content:
-            `Asignacion actualizada para **${taskKey}** en ${targetChannel}, pero no se pudo publicar el panel (revisa permisos del bot en ese canal).`,
+            `Asignación actualizada para **${taskKey}** en ${targetChannel}, pero no se pudo publicar el panel (revisa permisos del bot en ese canal).`,
           ephemeral: true
         });
         return;
       }
 
       await interaction.reply({
-        content: `Asignacion actualizada para **${taskKey}** en ${targetChannel}.`,
+        content: `Asignación actualizada para **${taskKey}** en ${targetChannel}.`,
         ephemeral: true
       });
       return;
