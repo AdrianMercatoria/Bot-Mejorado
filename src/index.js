@@ -82,6 +82,33 @@ const commands = [
 
 const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
 
+const TASK_SETTINGS = {
+  maritimo_terrestre: {
+    channelField: 'maritimeTerrestrialChannelId',
+    panelField: 'maritimeTerrestrialPanelMessageId',
+    label: 'Marítimo/Terrestre'
+  },
+  runs: {
+    channelField: 'runsChannelId',
+    panelField: 'runsPanelMessageId',
+    label: 'RUNS'
+  },
+  plantacion: {
+    channelField: 'plantationChannelId',
+    panelField: 'plantationPanelMessageId',
+    label: 'Plantación'
+  }
+};
+
+const TASK_ALIASES = {
+  maritimo_terrestre: 'maritimo_terrestre',
+  'maritimo-terrestre': 'maritimo_terrestre',
+  maritime_terrestrial: 'maritimo_terrestre',
+  runs: 'runs',
+  plantacion: 'plantacion',
+  plantation: 'plantacion'
+};
+
 async function registerCommands() {
   if (GUILD_ID) {
     await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
@@ -102,6 +129,8 @@ function getGuildState(state, guildId) {
       maritimeTerrestrialPanelMessageId: null,
       runsPanelMessageId: null,
       plantationPanelMessageId: null,
+      responseChannels: {},
+      missionPanels: {},
       runs: {
         status: 'available',
         cooldownEndsAt: null,
@@ -120,7 +149,49 @@ function getGuildState(state, guildId) {
     state.guilds[guildId].plantationPanelMessageId = null;
   }
 
+  ensureGuildPanelState(state.guilds[guildId]);
+
   return state.guilds[guildId];
+}
+
+function normalizeTaskKey(taskKey) {
+  return TASK_ALIASES[taskKey] || taskKey;
+}
+
+function getTaskSettings(taskKey) {
+  return TASK_SETTINGS[normalizeTaskKey(taskKey)] || null;
+}
+
+function ensureGuildPanelState(guildConfig) {
+  if (!guildConfig.responseChannels || typeof guildConfig.responseChannels !== 'object') {
+    guildConfig.responseChannels = {};
+  }
+  if (!guildConfig.missionPanels || typeof guildConfig.missionPanels !== 'object') {
+    guildConfig.missionPanels = {};
+  }
+
+  for (const taskKey of Object.keys(TASK_SETTINGS)) {
+    const settings = TASK_SETTINGS[taskKey];
+    const channelId = guildConfig.responseChannels[taskKey] || guildConfig[settings.channelField] || null;
+    guildConfig.responseChannels[taskKey] = channelId;
+    guildConfig[settings.channelField] = channelId;
+
+    const legacyMessageId = guildConfig[settings.panelField] || null;
+    const panelRef = guildConfig.missionPanels[taskKey];
+    if (panelRef && typeof panelRef === 'object' && panelRef.messageId) {
+      guildConfig.missionPanels[taskKey] = {
+        channelId: panelRef.channelId || channelId,
+        messageId: panelRef.messageId
+      };
+      guildConfig[settings.panelField] = panelRef.messageId;
+      continue;
+    }
+
+    guildConfig.missionPanels[taskKey] = legacyMessageId
+      ? { channelId, messageId: legacyMessageId }
+      : null;
+    guildConfig[settings.panelField] = legacyMessageId;
+  }
 }
 
 function addReport(state, report) {
@@ -194,16 +265,64 @@ function buildMainStatusButtons() {
 }
 
 function getTaskChannelId(guildConfig, taskKey) {
-  if (taskKey === 'maritimo_terrestre') {
-    return guildConfig.maritimeTerrestrialChannelId || guildConfig.mainChannelId || null;
-  }
-  if (taskKey === 'runs') {
-    return guildConfig.runsChannelId || guildConfig.mainChannelId || null;
-  }
-  if (taskKey === 'plantacion') {
-    return guildConfig.plantationChannelId || guildConfig.mainChannelId || null;
+  ensureGuildPanelState(guildConfig);
+  const normalizedTaskKey = normalizeTaskKey(taskKey);
+  const settings = getTaskSettings(normalizedTaskKey);
+  if (settings) {
+    return guildConfig.responseChannels[normalizedTaskKey] || guildConfig[settings.channelField] || guildConfig.mainChannelId || null;
   }
   return guildConfig.mainChannelId || null;
+}
+
+function setTaskChannelId(guildConfig, taskKey, channelId) {
+  ensureGuildPanelState(guildConfig);
+  const normalizedTaskKey = normalizeTaskKey(taskKey);
+  const settings = getTaskSettings(normalizedTaskKey);
+  if (!settings) return;
+  guildConfig.responseChannels[normalizedTaskKey] = channelId || null;
+  guildConfig[settings.channelField] = channelId || null;
+}
+
+function getMissionPanelRef(guildConfig, taskKey) {
+  ensureGuildPanelState(guildConfig);
+  const normalizedTaskKey = normalizeTaskKey(taskKey);
+  const settings = getTaskSettings(normalizedTaskKey);
+  if (!settings) return null;
+
+  const panelRef = guildConfig.missionPanels[normalizedTaskKey];
+  if (panelRef && panelRef.messageId) {
+    return {
+      channelId: panelRef.channelId || getTaskChannelId(guildConfig, normalizedTaskKey),
+      messageId: panelRef.messageId
+    };
+  }
+
+  const legacyMessageId = guildConfig[settings.panelField];
+  if (!legacyMessageId) return null;
+  return {
+    channelId: getTaskChannelId(guildConfig, normalizedTaskKey),
+    messageId: legacyMessageId
+  };
+}
+
+function setMissionPanelRef(guildConfig, taskKey, panelRef) {
+  ensureGuildPanelState(guildConfig);
+  const normalizedTaskKey = normalizeTaskKey(taskKey);
+  const settings = getTaskSettings(normalizedTaskKey);
+  if (!settings) return;
+
+  if (!panelRef || !panelRef.messageId) {
+    guildConfig.missionPanels[normalizedTaskKey] = null;
+    guildConfig[settings.panelField] = null;
+    return;
+  }
+
+  const normalizedRef = {
+    channelId: panelRef.channelId || getTaskChannelId(guildConfig, normalizedTaskKey),
+    messageId: panelRef.messageId
+  };
+  guildConfig.missionPanels[normalizedTaskKey] = normalizedRef;
+  guildConfig[settings.panelField] = normalizedRef.messageId;
 }
 
 function formatAssignedChannel(channelId) {
@@ -225,16 +344,15 @@ function buildChannelAssignmentText(guildConfig) {
 
 async function buildRunsPanelText(guildConfig) {
   const runs = guildConfig.runs;
-  const channelsText = buildChannelAssignmentText(guildConfig);
   if (runs.status === 'available') {
-    return `## RUNS\nEstado: **DISPONIBLE**\nPresiona **Iniciar** cuando comiencen.\n\n${channelsText}`;
+    return '## RUNS\nEstado: **DISPONIBLE**\nPresiona **Iniciar** cuando comiencen.';
   }
   if (runs.status === 'in_progress') {
-    return `## RUNS\nEstado: **EN PROGRESO**\nCuando finalice, presiona **Terminar**.\n\n${channelsText}`;
+    return '## RUNS\nEstado: **EN PROGRESO**\nCuando finalice, presiona **Terminar**.';
   }
 
   const left = Math.max(0, (runs.cooldownEndsAt || 0) - Date.now());
-  return `## RUNS\nEstado: **EN CD (4h)**\nTiempo restante: **${formatDuration(left)}**\n\n${channelsText}`;
+  return `## RUNS\nEstado: **EN CD (4h)**\nTiempo restante: **${formatDuration(left)}**`;
 }
 
 function buildPlantationPanelButtons() {
@@ -307,9 +425,8 @@ async function buildPlantationPanelText(guildConfig) {
   return (
     '## Plantacion\n' +
     'Selecciona el tipo de mision:\n' +
-    '- **Ramas**: 2 ciclos de 3h, con opcion de ciclo extra al final.\n' +
-    '- **Duplicado**: 1 ciclo unico de 3h.\n\n' +
-    buildChannelAssignmentText(guildConfig)
+    '- **Ramas**: 2 ciclos de 3h, con opción de ciclo extra al final.\n' +
+    '- **Duplicado**: 1 ciclo único de 3h.'
   );
 }
 
@@ -336,45 +453,147 @@ function createEvidenceKey(guildId, userId) {
   return `${guildId}:${userId}`;
 }
 
+function buildMaritimeTerrestrialPanelPayload() {
+  return {
+    content:
+      '## Marítimo / Terrestre\n' +
+      'Marítimo tiene CD fijo de 24h y Terrestre CD fijo de 8h.\n' +
+      'Selecciona uno y luego sube la evidencia (foto). La mision se valida automáticamente.',
+    components: buildMainTaskButtons()
+  };
+}
+
+async function buildRunsPanelPayload(guildConfig) {
+  return {
+    content: await buildRunsPanelText(guildConfig),
+    components: [...buildRunsButtons(guildConfig.runs.status), ...buildMainStatusButtons()]
+  };
+}
+
+async function buildPlantationPanelPayload(guildConfig) {
+  return {
+    content: await buildPlantationPanelText(guildConfig),
+    components: buildPlantationPanelButtons()
+  };
+}
+
+async function buildMissionPanelPayload(taskKey, guildConfig) {
+  const normalizedTaskKey = normalizeTaskKey(taskKey);
+  if (normalizedTaskKey === 'maritimo_terrestre') {
+    return buildMaritimeTerrestrialPanelPayload();
+  }
+  if (normalizedTaskKey === 'runs') {
+    return buildRunsPanelPayload(guildConfig);
+  }
+  if (normalizedTaskKey === 'plantacion') {
+    return buildPlantationPanelPayload(guildConfig);
+  }
+  throw new Error(`Tipo de panel no soportado: ${normalizedTaskKey}`);
+}
+
+async function fetchMissionPanelChannel(guild, channelId) {
+  if (!channelId) return null;
+  const channel = await guild.channels.fetch(channelId).catch(() => null);
+  if (!channel || typeof channel.isTextBased !== 'function' || !channel.isTextBased() || typeof channel.send !== 'function') {
+    return null;
+  }
+  return channel;
+}
+
+async function deleteMissionPanelMessage(guild, panelRef) {
+  if (!panelRef?.channelId || !panelRef?.messageId) return false;
+
+  const channel = await fetchMissionPanelChannel(guild, panelRef.channelId);
+  if (!channel) return false;
+
+  const message = await channel.messages.fetch(panelRef.messageId).catch(() => null);
+  if (!message) return false;
+
+  const deletedMessage = await message.delete().catch(() => null);
+  return Boolean(deletedMessage);
+}
+
+async function publishMissionPanel(guild, guildConfig, taskKey, options = {}) {
+  const normalizedTaskKey = normalizeTaskKey(taskKey);
+  const targetChannelId = getTaskChannelId(guildConfig, normalizedTaskKey);
+  const targetChannel = await fetchMissionPanelChannel(guild, targetChannelId);
+  if (!targetChannel) {
+    throw new Error(`Canal no compatible o sin permisos de envio: ${targetChannelId || 'sin_asignar'}`);
+  }
+
+  const payload = await buildMissionPanelPayload(normalizedTaskKey, guildConfig);
+  const previousRef = options.ignoreExisting ? null : getMissionPanelRef(guildConfig, normalizedTaskKey);
+  let panelMessage = null;
+  let action = 'create';
+
+  if (previousRef?.messageId && previousRef.channelId === targetChannel.id) {
+    const previousMessage = await targetChannel.messages.fetch(previousRef.messageId).catch(() => null);
+    if (previousMessage) {
+      try {
+        panelMessage = await previousMessage.edit(payload);
+        action = 'edit';
+      } catch (error) {
+        if (options.logPrefix) {
+          console.warn(`${options.logPrefix} tipo=${normalizedTaskKey} canal=${targetChannel.id} action=edit_failed`, error);
+        }
+      }
+    }
+  }
+
+  if (!panelMessage) {
+    panelMessage = await targetChannel.send(payload);
+  }
+
+  setMissionPanelRef(guildConfig, normalizedTaskKey, {
+    channelId: targetChannel.id,
+    messageId: panelMessage.id
+  });
+
+  let cleanedPrevious = false;
+  if (
+    previousRef?.messageId &&
+    (previousRef.channelId !== panelMessage.channelId || previousRef.messageId !== panelMessage.id)
+  ) {
+    cleanedPrevious = await deleteMissionPanelMessage(guild, previousRef);
+    if (options.logPrefix && previousRef.channelId !== targetChannel.id) {
+      console.log(
+        `${options.logPrefix} tipo=${normalizedTaskKey} canal=${targetChannel.id} previous_channel=${previousRef.channelId} cleanup=${cleanedPrevious ? 'deleted' : 'skipped'}`
+      );
+    }
+  }
+
+  if (options.logPrefix) {
+    console.log(`${options.logPrefix} tipo=${normalizedTaskKey} canal=${targetChannel.id} action=${action}`);
+  }
+
+  return {
+    action,
+    channelId: targetChannel.id,
+    messageId: panelMessage.id,
+    cleanedPrevious
+  };
+}
+
 async function setupPanels(interaction, state, guildConfig) {
   const channel = interaction.channel;
 
-  const mtPanel = await channel.send({
-    content:
-      '## Maritimo / Terrestre\nMaritimo tiene CD fijo de 24h y Terrestre CD fijo de 8h.\nSelecciona uno y luego sube la evidencia (foto). La mision se valida automaticamente.',
-    components: buildMainTaskButtons()
-  });
-
-  const runsPanel = await channel.send({
-    content: await buildRunsPanelText(guildConfig),
-    components: [...buildRunsButtons(guildConfig.runs.status), ...buildMainStatusButtons()]
-  });
-
   guildConfig.mainChannelId = channel.id;
-  guildConfig.maritimeTerrestrialChannelId = channel.id;
-  guildConfig.runsChannelId = channel.id;
-  guildConfig.plantationChannelId = guildConfig.plantationChannelId || channel.id;
-  guildConfig.maritimeTerrestrialPanelMessageId = mtPanel.id;
-  guildConfig.runsPanelMessageId = runsPanel.id;
+  setTaskChannelId(guildConfig, 'maritimo_terrestre', channel.id);
+  setTaskChannelId(guildConfig, 'runs', channel.id);
+  if (!getTaskChannelId(guildConfig, 'plantacion')) {
+    setTaskChannelId(guildConfig, 'plantacion', channel.id);
+  }
 
+  await publishMissionPanel(interaction.guild, guildConfig, 'maritimo_terrestre');
+  await publishMissionPanel(interaction.guild, guildConfig, 'runs');
   await ensurePlantationPanel(interaction.guild, guildConfig);
 
   writeState(state);
 }
 
 async function refreshRunsPanel(guild, guildConfig) {
-  if (!guildConfig.mainChannelId || !guildConfig.runsPanelMessageId) return;
-
-  const channel = await guild.channels.fetch(guildConfig.mainChannelId).catch(() => null);
-  if (!channel || channel.type !== ChannelType.GuildText) return;
-
-  const panel = await channel.messages.fetch(guildConfig.runsPanelMessageId).catch(() => null);
-  if (!panel) return;
-
-  await panel.edit({
-    content: await buildRunsPanelText(guildConfig),
-    components: [...buildRunsButtons(guildConfig.runs.status), ...buildMainStatusButtons()]
-  });
+  if (!getTaskChannelId(guildConfig, 'runs')) return;
+  await publishMissionPanel(guild, guildConfig, 'runs');
 }
 
 function ensureTaskContainer(state, guildId) {
@@ -391,46 +610,13 @@ function ensureTaskContainer(state, guildId) {
 }
 
 async function refreshPlantationPanel(guild, guildConfig) {
-  const channelId = getTaskChannelId(guildConfig, 'plantacion');
-  if (!channelId || !guildConfig.plantationPanelMessageId) return;
-
-  const channel = await guild.channels.fetch(channelId).catch(() => null);
-  if (!channel || channel.type !== ChannelType.GuildText) return;
-
-  const panel = await channel.messages.fetch(guildConfig.plantationPanelMessageId).catch(() => null);
-  if (!panel) return;
-
-  await panel.edit({
-    content: await buildPlantationPanelText(guildConfig),
-    components: buildPlantationPanelButtons()
-  });
+  if (!getTaskChannelId(guildConfig, 'plantacion')) return;
+  await publishMissionPanel(guild, guildConfig, 'plantacion');
 }
 
 async function ensurePlantationPanel(guild, guildConfig) {
-  const channelId = getTaskChannelId(guildConfig, 'plantacion');
-  if (!channelId) return;
-
-  const channel = await guild.channels.fetch(channelId).catch(() => null);
-  if (!channel || channel.type !== ChannelType.GuildText) return;
-
-  let panel = null;
-  if (guildConfig.plantationPanelMessageId) {
-    panel = await channel.messages.fetch(guildConfig.plantationPanelMessageId).catch(() => null);
-  }
-
-  if (!panel) {
-    panel = await channel.send({
-      content: await buildPlantationPanelText(guildConfig),
-      components: buildPlantationPanelButtons()
-    });
-    guildConfig.plantationPanelMessageId = panel.id;
-    return;
-  }
-
-  await panel.edit({
-    content: await buildPlantationPanelText(guildConfig),
-    components: buildPlantationPanelButtons()
-  });
+  if (!getTaskChannelId(guildConfig, 'plantacion')) return;
+  await publishMissionPanel(guild, guildConfig, 'plantacion');
 }
 
 async function notifyMain(guild, guildConfig, text) {
@@ -541,8 +727,9 @@ async function handleRunsButton(interaction, state, guildConfig) {
       ephemeral: true
     });
 
-    await notifyRunsChannel(interaction.guild, guildConfig, `🚀 ${interaction.user} inicio una RUNS.`);
+    await notifyRunsChannel(interaction.guild, guildConfig, `🚀 ${interaction.user} inició una RUNS.`);
     await refreshRunsPanel(interaction.guild, guildConfig);
+    writeState(state);
     return;
   }
 
@@ -576,9 +763,10 @@ async function handleRunsButton(interaction, state, guildConfig) {
     await notifyRunsChannel(
       interaction.guild,
       guildConfig,
-      `⏳ ${interaction.user} finalizo RUNS. Queda en cooldown por 4 horas.`
+      `⏳ ${interaction.user} finalizó RUNS. Queda en cooldown por 4 horas.`
     );
     await refreshRunsPanel(interaction.guild, guildConfig);
+    writeState(state);
   }
 }
 
@@ -1131,26 +1319,41 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (interaction.commandName === 'asignar_canal') {
-      const taskKey = interaction.options.getString('tarea', true);
+      const taskKey = normalizeTaskKey(interaction.options.getString('tarea', true));
       const targetChannel = interaction.options.getChannel('canal', true);
+      const taskSettings = getTaskSettings(taskKey);
 
-      if (taskKey === 'maritimo_terrestre') {
-        guildConfig.maritimeTerrestrialChannelId = targetChannel.id;
-      } else if (taskKey === 'runs') {
-        guildConfig.runsChannelId = targetChannel.id;
-      } else if (taskKey === 'plantacion') {
-        guildConfig.plantationChannelId = targetChannel.id;
-        guildConfig.plantationPanelMessageId = null;
+      if (!taskSettings) {
+        await interaction.reply({
+          content: `Tipo de tarea no soportado: **${taskKey}**.`,
+          ephemeral: true
+        });
+        return;
       }
 
+      setTaskChannelId(guildConfig, taskKey, targetChannel.id);
+
       writeState(state);
-      await refreshRunsPanel(interaction.guild, guildConfig);
-      await ensurePlantationPanel(interaction.guild, guildConfig);
-      writeState(state);
+
+      let panelStatusText = 'La asignación se guardó, pero no pude publicar el panel. Revisa permisos del bot en ese canal.';
+      try {
+        const publishResult = await publishMissionPanel(interaction.guild, guildConfig, taskKey, {
+          logPrefix: '[asignar_canal]'
+        });
+        writeState(state);
+        panelStatusText =
+          `La asignación se guardó y el panel se ${publishResult.action === 'edit' ? 'actualizó' : 'publicó'} de inmediato.`;
+      } catch (error) {
+        console.error(
+          `[asignar_canal] tipo=${taskKey} canal=${targetChannel.id} action=failed`,
+          error
+        );
+      }
 
       await interaction.reply({
         content:
-          `Asignacion actualizada para **${taskKey}** en ${targetChannel}.\n` +
+          `Asignación actualizada para **${taskSettings.label}** en ${targetChannel}.\n` +
+          `${panelStatusText}\n\n` +
           buildChannelAssignmentText(guildConfig),
         ephemeral: true
       });
@@ -1201,8 +1404,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (interaction.customId === 'main:plant-panel') {
-      guildConfig.plantationPanelMessageId = null;
-      await ensurePlantationPanel(interaction.guild, guildConfig);
+      setMissionPanelRef(guildConfig, 'plantacion', null);
+      await publishMissionPanel(interaction.guild, guildConfig, 'plantacion');
       writeState(state);
 
       const channelId = getTaskChannelId(guildConfig, 'plantacion');
