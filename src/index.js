@@ -69,7 +69,8 @@ const commands = [
         .addChoices(
           { name: 'Maritimo/Terrestre', value: 'maritimo_terrestre' },
           { name: 'RUNS', value: 'runs' },
-          { name: 'Plantacion', value: 'plantacion' }
+          { name: 'Plantacion', value: 'plantacion' },
+          { name: 'Vender (Bolsa y Porro)', value: 'vender' }
         )
     )
     .addChannelOption((opt) =>
@@ -156,7 +157,7 @@ function getGuildState(state, guildId) {
       missionPanels: {},
       adminPanelRef: null,
       customCooldowns: {},
-      vender: { active: false, nextNotificationAt: null, pendingDelete: null },
+      vender: { active: false, channelId: null, notificationIntervalMs: null, deleteDelayMs: null, nextNotificationAt: null, pendingDelete: null },
       runs: {
         status: 'available',
         cooldownEndsAt: null,
@@ -185,10 +186,19 @@ function getGuildState(state, guildId) {
     state.guilds[guildId].customCooldowns = {};
   }
   if (!state.guilds[guildId].vender || typeof state.guilds[guildId].vender !== 'object') {
-    state.guilds[guildId].vender = { active: false, nextNotificationAt: null, pendingDelete: null };
+    state.guilds[guildId].vender = { active: false, channelId: null, notificationIntervalMs: null, deleteDelayMs: null, nextNotificationAt: null, pendingDelete: null };
   }
   if (state.guilds[guildId].vender.pendingDelete === undefined) {
     state.guilds[guildId].vender.pendingDelete = null;
+  }
+  if (state.guilds[guildId].vender.channelId === undefined) {
+    state.guilds[guildId].vender.channelId = null;
+  }
+  if (state.guilds[guildId].vender.notificationIntervalMs === undefined) {
+    state.guilds[guildId].vender.notificationIntervalMs = null;
+  }
+  if (state.guilds[guildId].vender.deleteDelayMs === undefined) {
+    state.guilds[guildId].vender.deleteDelayMs = null;
   }
   if (state.guilds[guildId].adminPanelRef === undefined) {
     state.guilds[guildId].adminPanelRef = null;
@@ -261,8 +271,24 @@ const VENDER_NOTIFICATION_INTERVAL_MS = 40 * 60 * 1000; // 40 minutos
 const VENDER_DELETE_DELAY_MS = 10 * 60 * 1000; // 10 minutos
 const RUNS_AUTO_CLOSE_MS = 60 * 60 * 1000; // 1 hora
 
+const VENDER_INTERVAL_PRESETS_MS = [20, 30, 40, 60, 90].map((m) => m * 60 * 1000);
+const VENDER_DELAY_PRESETS_MS = [5, 10, 15, 20].map((m) => m * 60 * 1000);
+
 function getCustomCooldown(guildConfig, type) {
   return guildConfig.customCooldowns?.[type] ?? DEFAULT_COOLDOWNS[type] ?? 0;
+}
+
+function getVenderIntervalMs(guildConfig) {
+  return guildConfig.vender?.notificationIntervalMs || VENDER_NOTIFICATION_INTERVAL_MS;
+}
+
+function getVenderDelayMs(guildConfig) {
+  return guildConfig.vender?.deleteDelayMs || VENDER_DELETE_DELAY_MS;
+}
+
+function formatMs(ms) {
+  const min = Math.round(ms / 60000);
+  return `${min}min`;
 }
 
 function isAdmin(interaction) {
@@ -311,6 +337,9 @@ function buildRunsButtons(runsStatus) {
 
 function buildAdminPanelButtons(guildConfig) {
   const venderActive = guildConfig.vender?.active || false;
+  const venderChannelId = guildConfig.vender?.channelId || null;
+  const intervalLabel = formatMs(getVenderIntervalMs(guildConfig));
+  const delayLabel = formatMs(getVenderDelayMs(guildConfig));
   return [
     new ActionRowBuilder().addComponents(
       new ButtonBuilder()
@@ -358,22 +387,50 @@ function buildAdminPanelButtons(guildConfig) {
       new ButtonBuilder()
         .setCustomId('main:vender-toggle')
         .setLabel(venderActive ? '⛔ Detener Vender' : '▶️ Iniciar Vender')
-        .setStyle(venderActive ? ButtonStyle.Danger : ButtonStyle.Success)
+        .setStyle(venderActive ? ButtonStyle.Danger : ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId('main:vender-set-channel')
+        .setLabel(venderChannelId ? '📢 Canal asignado ✅' : '📢 Asignar canal')
+        .setStyle(venderChannelId ? ButtonStyle.Secondary : ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId('main:vender-interval')
+        .setLabel(`⏱️ Intervalo: ${intervalLabel}`)
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('main:vender-delay')
+        .setLabel(`🗑️ Borrado: ${delayLabel}`)
+        .setStyle(ButtonStyle.Secondary)
     )
   ];
 }
 
 function buildAdminPanelPayload(guildConfig) {
-  const venderActive = guildConfig.vender?.active || false;
+  const vender = guildConfig.vender || {};
+  const venderActive = vender.active || false;
+  const venderChannelId = vender.channelId || null;
   const cds = guildConfig.customCooldowns || {};
   const cdEntries = Object.entries(cds);
   const cdText = cdEntries.length
     ? cdEntries.map(([t, h]) => `${t}: ${h}h`).join(', ')
     : 'Ninguno (usando defaults)';
+
+  const nextNotifText = vender.nextNotificationAt
+    ? `<t:${Math.floor(vender.nextNotificationAt / 1000)}:R>`
+    : 'N/A';
+  const pendingDeleteText = vender.pendingDelete
+    ? `Sí (borra <t:${Math.floor(vender.pendingDelete.deleteAt / 1000)}:R>)`
+    : 'No';
+
   const content =
     '## Panel de Administración\n' +
     'Usa los botones para gestionar tareas y canales.\n' +
-    `Vender (Bolsa y Porro): **${venderActive ? 'Activo 🟢' : 'Inactivo 🔴'}**\n` +
+    '### Vender (Bolsa y Porro)\n' +
+    `- Estado: **${venderActive ? 'Activo 🟢' : 'Inactivo 🔴'}**\n` +
+    `- Canal: ${venderChannelId ? `<#${venderChannelId}>` : '⚠️ Sin asignar (usa /asignar_canal o botón 📢)'}\n` +
+    `- Intervalo: **${formatMs(getVenderIntervalMs(guildConfig))}**\n` +
+    `- Auto-borrado: **${formatMs(getVenderDelayMs(guildConfig))}**\n` +
+    `- Próxima notificación: **${nextNotifText}**\n` +
+    `- Borrado pendiente: **${pendingDeleteText}**\n` +
     `CDs personalizados: ${cdText}\n` +
     '_Usa `/config_cd` para cambiar cooldowns._';
   return { content, components: buildAdminPanelButtons(guildConfig) };
@@ -1331,6 +1388,19 @@ function buildEstadoText(state, guildId, guildConfig, guildTasks) {
     }
   }
 
+  const vender = guildConfig.vender || {};
+  lines.push('### Vender (Bolsa y Porro)');
+  lines.push(`- Estado: **${vender.active ? 'Activo 🟢' : 'Inactivo 🔴'}**`);
+  lines.push(`- Canal: ${vender.channelId ? `<#${vender.channelId}>` : '⚠️ Sin asignar'}`);
+  lines.push(`- Intervalo: **${formatMs(getVenderIntervalMs(guildConfig))}**`);
+  lines.push(`- Auto-borrado: **${formatMs(getVenderDelayMs(guildConfig))}**`);
+  if (vender.nextNotificationAt) {
+    lines.push(`- Próxima notificación: <t:${Math.floor(vender.nextNotificationAt / 1000)}:R>`);
+  } else {
+    lines.push('- Próxima notificación: N/A');
+  }
+  lines.push(`- Borrado pendiente: **${vender.pendingDelete ? 'Sí' : 'No'}**`);
+
   return lines.join('\n');
 }
 
@@ -1438,9 +1508,11 @@ async function schedulerTick() {
 
     // Vender (Bolsa y Porro) cyclic task
     if (!guildConfig.vender) {
-      guildConfig.vender = { active: false, nextNotificationAt: null, pendingDelete: null };
+      guildConfig.vender = { active: false, channelId: null, notificationIntervalMs: null, deleteDelayMs: null, nextNotificationAt: null, pendingDelete: null };
     }
     const vender = guildConfig.vender;
+    const venderIntervalMs = getVenderIntervalMs(guildConfig);
+    const venderDelayMs = getVenderDelayMs(guildConfig);
 
     // Delete pending vender message if its time has come
     if (vender.pendingDelete && now >= vender.pendingDelete.deleteAt) {
@@ -1449,30 +1521,32 @@ async function schedulerTick() {
         const venderMsg = await venderCh.messages.fetch(vender.pendingDelete.messageId).catch(() => null);
         if (venderMsg) {
           await venderMsg.delete().catch(() => null);
-          console.log(`[vender] guildId=${guildId} Mensaje de vender eliminado tras ${VENDER_DELETE_DELAY_MS / 60000} min`);
+          console.log(`[vender] guildId=${guildId} Mensaje de vender eliminado tras ${venderDelayMs / 60000} min`);
         }
       }
       vender.pendingDelete = null;
       changed = true;
     }
 
-    // Send new vender notification if active and due
-    if (vender.active && (!vender.nextNotificationAt || now >= vender.nextNotificationAt)) {
-      const mainCh = await guild.channels.fetch(guildConfig.mainChannelId || '').catch(() => null);
-      if (mainCh && typeof mainCh.send === 'function') {
-        const sentMsg = await mainCh
+    // Send new vender notification if active, channel configured, and due
+    if (vender.active && vender.channelId && (!vender.nextNotificationAt || now >= vender.nextNotificationAt)) {
+      const venderCh = await guild.channels.fetch(vender.channelId).catch(() => null);
+      if (venderCh && typeof venderCh.send === 'function') {
+        const sentMsg = await venderCh
           .send('@everyone 🛒 ¡Es hora de **Vender (Bolsa y Porro)**!')
           .catch(() => null);
         if (sentMsg) {
           vender.pendingDelete = {
-            channelId: mainCh.id,
+            channelId: venderCh.id,
             messageId: sentMsg.id,
-            deleteAt: now + VENDER_DELETE_DELAY_MS
+            deleteAt: now + venderDelayMs
           };
-          console.log(`[vender] guildId=${guildId} Notificacion enviada, se borrara en ${VENDER_DELETE_DELAY_MS / 60000} min`);
+          console.log(`[vender] guildId=${guildId} Notificacion enviada, se borrara en ${venderDelayMs / 60000} min`);
         }
+      } else {
+        console.warn(`[vender] guildId=${guildId} Canal ${vender.channelId} no accesible, notificacion omitida`);
       }
-      vender.nextNotificationAt = now + VENDER_NOTIFICATION_INTERVAL_MS;
+      vender.nextNotificationAt = now + venderIntervalMs;
       changed = true;
     }
   }
@@ -1637,6 +1711,32 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.commandName === 'asignar_canal') {
       const taskKey = normalizeTaskKey(interaction.options.getString('tarea', true));
       const targetChannel = interaction.options.getChannel('canal', true);
+
+      // Vender channel assignment handled separately (stored in guildConfig.vender.channelId)
+      if (taskKey === 'vender') {
+        if (!isAdmin(interaction)) {
+          await interaction.reply({
+            content: '⛔ Solo administradores pueden asignar el canal de Vender.',
+            ephemeral: true
+          });
+          return;
+        }
+        if (!guildConfig.vender) {
+          guildConfig.vender = { active: false, channelId: null, notificationIntervalMs: null, deleteDelayMs: null, nextNotificationAt: null, pendingDelete: null };
+        }
+        guildConfig.vender.channelId = targetChannel.id;
+        writeState(state);
+        await publishAdminPanel(interaction.guild, guildConfig);
+        writeState(state);
+        await interaction.reply({
+          content:
+            `✅ Canal de **Vender (Bolsa y Porro)** asignado a ${targetChannel}.\n` +
+            'El scheduler enviará notificaciones allí cuando esté activo.',
+          ephemeral: true
+        });
+        return;
+      }
+
       const taskSettings = getTaskSettings(taskKey);
 
       if (!taskSettings) {
@@ -1919,7 +2019,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
 
       if (!guildConfig.vender) {
-        guildConfig.vender = { active: false, nextNotificationAt: null, pendingDelete: null };
+        guildConfig.vender = { active: false, channelId: null, notificationIntervalMs: null, deleteDelayMs: null, nextNotificationAt: null, pendingDelete: null };
       }
 
       guildConfig.vender.active = !guildConfig.vender.active;
@@ -1939,10 +2039,98 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await publishAdminPanel(interaction.guild, guildConfig);
       writeState(state);
 
+      const channelWarning = guildConfig.vender.active && !guildConfig.vender.channelId
+        ? '\n⚠️ **Sin canal configurado** — asigna uno con `/asignar_canal vender #canal` o el botón 📢 en el panel.'
+        : '';
+
       await interaction.reply({
         content: guildConfig.vender.active
-          ? '✅ Notificación **Vender (Bolsa y Porro)** activada. Se enviará cada 40 min y se borrará a los 10 min.'
+          ? `✅ Notificación **Vender (Bolsa y Porro)** activada. Se enviará cada ${formatMs(getVenderIntervalMs(guildConfig))} y se borrará a los ${formatMs(getVenderDelayMs(guildConfig))}.${channelWarning}`
           : '⛔ Notificación **Vender (Bolsa y Porro)** detenida.',
+        ephemeral: true
+      });
+      return;
+    }
+
+    // Set current channel as Vender notification channel
+    if (interaction.customId === 'main:vender-set-channel') {
+      if (!isAdmin(interaction)) {
+        await interaction.reply({ content: '⛔ Solo administradores pueden usar esta accion.', ephemeral: true });
+        return;
+      }
+
+      if (!guildConfig.vender) {
+        guildConfig.vender = { active: false, channelId: null, notificationIntervalMs: null, deleteDelayMs: null, nextNotificationAt: null, pendingDelete: null };
+      }
+
+      guildConfig.vender.channelId = interaction.channelId;
+      writeState(state);
+      await publishAdminPanel(interaction.guild, guildConfig);
+      writeState(state);
+
+      await interaction.reply({
+        content: `✅ Canal de **Vender** asignado a <#${interaction.channelId}>.\nTambién puedes asignar otro canal con \`/asignar_canal vender #canal\`.`,
+        ephemeral: true
+      });
+      return;
+    }
+
+    // Cycle Vender notification interval preset
+    if (interaction.customId === 'main:vender-interval') {
+      if (!isAdmin(interaction)) {
+        await interaction.reply({ content: '⛔ Solo administradores pueden usar esta accion.', ephemeral: true });
+        return;
+      }
+
+      if (!guildConfig.vender) {
+        guildConfig.vender = { active: false, channelId: null, notificationIntervalMs: null, deleteDelayMs: null, nextNotificationAt: null, pendingDelete: null };
+      }
+
+      const current = getVenderIntervalMs(guildConfig);
+      // indexOf returns -1 if current value is not in presets (e.g. default constant not overridden yet);
+      // (-1 + 1) % length = 0, so it wraps to the first preset, which is the desired behavior.
+      const idx = VENDER_INTERVAL_PRESETS_MS.indexOf(current);
+      const next = VENDER_INTERVAL_PRESETS_MS[(idx + 1) % VENDER_INTERVAL_PRESETS_MS.length];
+      guildConfig.vender.notificationIntervalMs = next;
+      // Reset next notification so it re-schedules with new interval
+      if (guildConfig.vender.nextNotificationAt) {
+        guildConfig.vender.nextNotificationAt = Date.now() + next;
+      }
+
+      writeState(state);
+      await publishAdminPanel(interaction.guild, guildConfig);
+      writeState(state);
+
+      await interaction.reply({
+        content: `✅ Intervalo de **Vender** actualizado a **${formatMs(next)}**.`,
+        ephemeral: true
+      });
+      return;
+    }
+
+    // Cycle Vender delete delay preset
+    if (interaction.customId === 'main:vender-delay') {
+      if (!isAdmin(interaction)) {
+        await interaction.reply({ content: '⛔ Solo administradores pueden usar esta accion.', ephemeral: true });
+        return;
+      }
+
+      if (!guildConfig.vender) {
+        guildConfig.vender = { active: false, channelId: null, notificationIntervalMs: null, deleteDelayMs: null, nextNotificationAt: null, pendingDelete: null };
+      }
+
+      const current = getVenderDelayMs(guildConfig);
+      // Same wrapping logic as interval: -1 index wraps to first preset.
+      const idx = VENDER_DELAY_PRESETS_MS.indexOf(current);
+      const next = VENDER_DELAY_PRESETS_MS[(idx + 1) % VENDER_DELAY_PRESETS_MS.length];
+      guildConfig.vender.deleteDelayMs = next;
+
+      writeState(state);
+      await publishAdminPanel(interaction.guild, guildConfig);
+      writeState(state);
+
+      await interaction.reply({
+        content: `✅ Tiempo de auto-borrado de **Vender** actualizado a **${formatMs(next)}**.`,
         ephemeral: true
       });
       return;
