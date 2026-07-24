@@ -257,6 +257,10 @@ function ensureRuntimeState(state) {
 
 const DEFAULT_COOLDOWNS = { maritimo: 24, terrestre: 8, runs: 4, plantacion: 3 };
 
+const VENDER_NOTIFICATION_INTERVAL_MS = 40 * 60 * 1000; // 40 minutos
+const VENDER_DELETE_DELAY_MS = 10 * 60 * 1000; // 10 minutos
+const RUNS_AUTO_CLOSE_MS = 60 * 60 * 1000; // 1 hora
+
 function getCustomCooldown(guildConfig, type) {
   return guildConfig.customCooldowns?.[type] ?? DEFAULT_COOLDOWNS[type] ?? 0;
 }
@@ -361,11 +365,16 @@ function buildAdminPanelButtons(guildConfig) {
 
 function buildAdminPanelPayload(guildConfig) {
   const venderActive = guildConfig.vender?.active || false;
+  const cds = guildConfig.customCooldowns || {};
+  const cdEntries = Object.entries(cds);
+  const cdText = cdEntries.length
+    ? cdEntries.map(([t, h]) => `${t}: ${h}h`).join(', ')
+    : 'Ninguno (usando defaults)';
   const content =
     '## Panel de Administración\n' +
     'Usa los botones para gestionar tareas y canales.\n' +
     `Vender (Bolsa y Porro): **${venderActive ? 'Activo 🟢' : 'Inactivo 🔴'}**\n` +
-    `CDs personalizados: ${Object.keys(guildConfig.customCooldowns || {}).length ? JSON.stringify(guildConfig.customCooldowns) : 'Ninguno (usando defaults)'}\n` +
+    `CDs personalizados: ${cdText}\n` +
     '_Usa `/config_cd` para cambiar cooldowns._';
   return { content, components: buildAdminPanelButtons(guildConfig) };
 }
@@ -581,7 +590,7 @@ function buildMaritimeTerrestrialPanelPayload(guildConfig) {
   return {
     content:
       '## Marítimo / Terrestre\n' +
-      `Marítimo tiene CD fijo de ${getCustomCooldown(guildConfig, 'maritimo')}h y Terrestre CD fijo de ${getCustomCooldown(guildConfig, 'terrestre')}h.\n` +
+      `Marítimo tiene CD actual de ${getCustomCooldown(guildConfig, 'maritimo')}h y Terrestre CD actual de ${getCustomCooldown(guildConfig, 'terrestre')}h.\n` +
       'Selecciona uno y luego sube la evidencia (foto). La mision se valida automáticamente.',
     components: buildMainTaskButtons(guildConfig)
   };
@@ -1331,7 +1340,6 @@ async function schedulerTick() {
 
   let changed = false;
   const now = Date.now();
-  const ONE_HOUR = 60 * 60 * 1000;
 
   for (const [guildId, guildConfig] of Object.entries(state.guilds)) {
     const guild = await client.guilds.fetch(guildId).catch(() => null);
@@ -1343,7 +1351,7 @@ async function schedulerTick() {
     if (
       guildConfig.runs.status === 'in_progress' &&
       guildConfig.runs.startedAt &&
-      now - guildConfig.runs.startedAt >= ONE_HOUR
+      now - guildConfig.runs.startedAt >= RUNS_AUTO_CLOSE_MS
     ) {
       const runsHours = getCustomCooldown(guildConfig, 'runs');
       console.log(
@@ -1441,7 +1449,7 @@ async function schedulerTick() {
         const venderMsg = await venderCh.messages.fetch(vender.pendingDelete.messageId).catch(() => null);
         if (venderMsg) {
           await venderMsg.delete().catch(() => null);
-          console.log(`[vender] guildId=${guildId} Mensaje de vender eliminado tras 10 min`);
+          console.log(`[vender] guildId=${guildId} Mensaje de vender eliminado tras ${VENDER_DELETE_DELAY_MS / 60000} min`);
         }
       }
       vender.pendingDelete = null;
@@ -1459,12 +1467,12 @@ async function schedulerTick() {
           vender.pendingDelete = {
             channelId: mainCh.id,
             messageId: sentMsg.id,
-            deleteAt: now + 10 * 60 * 1000
+            deleteAt: now + VENDER_DELETE_DELAY_MS
           };
-          console.log(`[vender] guildId=${guildId} Notificacion enviada, se borrara en 10 min`);
+          console.log(`[vender] guildId=${guildId} Notificacion enviada, se borrara en ${VENDER_DELETE_DELAY_MS / 60000} min`);
         }
       }
-      vender.nextNotificationAt = now + 40 * 60 * 1000;
+      vender.nextNotificationAt = now + VENDER_NOTIFICATION_INTERVAL_MS;
       changed = true;
     }
   }
@@ -1785,15 +1793,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      const lines = pending.map(
+      // Discord allows max 25 buttons (5 rows × 5 buttons)
+      const displayPending = pending.slice(0, 25);
+      const overflowCount = pending.length - displayPending.length;
+
+      const lines = displayPending.map(
         ([, e]) =>
           `- <@${e.userId}> | **${e.taskType}** (${e.cooldownHours}h) | registrado <t:${Math.floor(e.createdAt / 1000)}:R>`
       );
 
-      const buttons = pending.map(([key, e]) =>
+      const buttons = displayPending.map(([key, e], idx) =>
         new ButtonBuilder()
           .setCustomId(`main:cancel-evidence:${key}`)
-          .setLabel(`Cancelar ${e.taskType} de ${e.userId}`)
+          .setLabel(`Cancelar #${idx + 1} ${e.taskType}`)
           .setStyle(ButtonStyle.Danger)
       );
 
@@ -1802,8 +1814,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
         rows.push(new ActionRowBuilder().addComponents(buttons.slice(i, i + 5)));
       }
 
+      const overflowNote = overflowCount > 0 ? `\n_...y ${overflowCount} más (expiran automáticamente)._` : '';
       await interaction.reply({
-        content: `## Evidencias pendientes\n${lines.join('\n')}`,
+        content: `## Evidencias pendientes\n${lines.join('\n')}${overflowNote}`,
         components: rows,
         ephemeral: true
       });
