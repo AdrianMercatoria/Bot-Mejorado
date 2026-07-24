@@ -8,6 +8,7 @@ const {
   Client,
   Events,
   GatewayIntentBits,
+  PermissionsBitField,
   Partials,
   REST,
   Routes,
@@ -77,6 +78,28 @@ const commands = [
         .setDescription('Canal de respuesta para la tarea')
         .addChannelTypes(ChannelType.GuildText)
         .setRequired(true)
+    ),
+  new SlashCommandBuilder()
+    .setName('config_cd')
+    .setDescription('Configura el cooldown de una tarea (solo administradores)')
+    .addStringOption((opt) =>
+      opt
+        .setName('tarea')
+        .setDescription('Tarea a configurar')
+        .setRequired(true)
+        .addChoices(
+          { name: 'Maritimo', value: 'maritimo' },
+          { name: 'Terrestre', value: 'terrestre' },
+          { name: 'RUNS', value: 'runs' },
+          { name: 'Plantacion (ciclo)', value: 'plantacion' }
+        )
+    )
+    .addIntegerOption((opt) =>
+      opt
+        .setName('horas')
+        .setDescription('Duracion del cooldown en horas (minimo 1)')
+        .setRequired(true)
+        .setMinValue(1)
     )
 ].map((c) => c.toJSON());
 
@@ -131,10 +154,15 @@ function getGuildState(state, guildId) {
       plantationPanelMessageId: null,
       responseChannels: {},
       missionPanels: {},
+      adminPanelRef: null,
+      customCooldowns: {},
+      vender: { active: false, nextNotificationAt: null, pendingDelete: null },
       runs: {
         status: 'available',
         cooldownEndsAt: null,
-        notifiedReady: false
+        notifiedReady: false,
+        startedAt: null,
+        uniqueUsers: []
       }
     };
   }
@@ -147,6 +175,23 @@ function getGuildState(state, guildId) {
   }
   if (state.guilds[guildId].plantationPanelMessageId === undefined) {
     state.guilds[guildId].plantationPanelMessageId = null;
+  }
+
+  const runs = state.guilds[guildId].runs;
+  if (runs.startedAt === undefined) runs.startedAt = null;
+  if (!Array.isArray(runs.uniqueUsers)) runs.uniqueUsers = [];
+
+  if (!state.guilds[guildId].customCooldowns || typeof state.guilds[guildId].customCooldowns !== 'object') {
+    state.guilds[guildId].customCooldowns = {};
+  }
+  if (!state.guilds[guildId].vender || typeof state.guilds[guildId].vender !== 'object') {
+    state.guilds[guildId].vender = { active: false, nextNotificationAt: null, pendingDelete: null };
+  }
+  if (state.guilds[guildId].vender.pendingDelete === undefined) {
+    state.guilds[guildId].vender.pendingDelete = null;
+  }
+  if (state.guilds[guildId].adminPanelRef === undefined) {
+    state.guilds[guildId].adminPanelRef = null;
   }
 
   ensureGuildPanelState(state.guilds[guildId]);
@@ -210,16 +255,35 @@ function ensureRuntimeState(state) {
   return state;
 }
 
-function buildMainTaskButtons() {
+const DEFAULT_COOLDOWNS = { maritimo: 24, terrestre: 8, runs: 4, plantacion: 3 };
+
+const VENDER_NOTIFICATION_INTERVAL_MS = 40 * 60 * 1000; // 40 minutos
+const VENDER_DELETE_DELAY_MS = 10 * 60 * 1000; // 10 minutos
+const RUNS_AUTO_CLOSE_MS = 60 * 60 * 1000; // 1 hora
+
+function getCustomCooldown(guildConfig, type) {
+  return guildConfig.customCooldowns?.[type] ?? DEFAULT_COOLDOWNS[type] ?? 0;
+}
+
+function isAdmin(interaction) {
+  return Boolean(
+    interaction.member?.permissions?.has(PermissionsBitField.Flags.Administrator) ||
+    interaction.guild?.ownerId === interaction.user.id
+  );
+}
+
+function buildMainTaskButtons(guildConfig) {
+  const maritimoHours = getCustomCooldown(guildConfig, 'maritimo');
+  const terrestreHours = getCustomCooldown(guildConfig, 'terrestre');
   return [
     new ActionRowBuilder().addComponents(
       new ButtonBuilder()
-        .setCustomId('mt:maritimo:24')
-        .setLabel('Maritimo (24h)')
+        .setCustomId(`mt:maritimo:${maritimoHours}`)
+        .setLabel(`Maritimo (${maritimoHours}h)`)
         .setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
-        .setCustomId('mt:terrestre:8')
-        .setLabel('Terrestre (8h)')
+        .setCustomId(`mt:terrestre:${terrestreHours}`)
+        .setLabel(`Terrestre (${terrestreHours}h)`)
         .setStyle(ButtonStyle.Success)
     )
   ];
@@ -245,7 +309,8 @@ function buildRunsButtons(runsStatus) {
   ];
 }
 
-function buildMainStatusButtons() {
+function buildAdminPanelButtons(guildConfig) {
+  const venderActive = guildConfig.vender?.active || false;
   return [
     new ActionRowBuilder().addComponents(
       new ButtonBuilder()
@@ -257,11 +322,61 @@ function buildMainStatusButtons() {
         .setLabel('Ver canales')
         .setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
-        .setCustomId('main:plant-panel')
-        .setLabel('Recrear panel Plantacion')
+        .setCustomId('main:list-evidence')
+        .setLabel('Evidencias pendientes')
         .setStyle(ButtonStyle.Secondary)
+    ),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('main:regen-panel:maritimo_terrestre')
+        .setLabel('Recrear panel MT')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId('main:regen-panel:runs')
+        .setLabel('Recrear panel RUNS')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId('main:regen-panel:plantacion')
+        .setLabel('Recrear panel Plantacion')
+        .setStyle(ButtonStyle.Primary)
+    ),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('main:clean:maritimo_terrestre')
+        .setLabel('Limpiar canal MT')
+        .setStyle(ButtonStyle.Danger),
+      new ButtonBuilder()
+        .setCustomId('main:clean:runs')
+        .setLabel('Limpiar canal RUNS')
+        .setStyle(ButtonStyle.Danger),
+      new ButtonBuilder()
+        .setCustomId('main:clean:plantacion')
+        .setLabel('Limpiar canal Plantacion')
+        .setStyle(ButtonStyle.Danger)
+    ),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('main:vender-toggle')
+        .setLabel(venderActive ? '⛔ Detener Vender' : '▶️ Iniciar Vender')
+        .setStyle(venderActive ? ButtonStyle.Danger : ButtonStyle.Success)
     )
   ];
+}
+
+function buildAdminPanelPayload(guildConfig) {
+  const venderActive = guildConfig.vender?.active || false;
+  const cds = guildConfig.customCooldowns || {};
+  const cdEntries = Object.entries(cds);
+  const cdText = cdEntries.length
+    ? cdEntries.map(([t, h]) => `${t}: ${h}h`).join(', ')
+    : 'Ninguno (usando defaults)';
+  const content =
+    '## Panel de Administración\n' +
+    'Usa los botones para gestionar tareas y canales.\n' +
+    `Vender (Bolsa y Porro): **${venderActive ? 'Activo 🟢' : 'Inactivo 🔴'}**\n` +
+    `CDs personalizados: ${cdText}\n` +
+    '_Usa `/config_cd` para cambiar cooldowns._';
+  return { content, components: buildAdminPanelButtons(guildConfig) };
 }
 
 function getTaskChannelId(guildConfig, taskKey) {
@@ -344,15 +459,33 @@ function buildChannelAssignmentText(guildConfig) {
 
 async function buildRunsPanelText(guildConfig) {
   const runs = guildConfig.runs;
+  const userCount = (runs.uniqueUsers || []).length;
+  const runsHours = getCustomCooldown(guildConfig, 'runs');
+
   if (runs.status === 'available') {
-    return '## RUNS\nEstado: **DISPONIBLE**\nPresiona **Iniciar** cuando comiencen.';
+    return (
+      '## RUNS\n' +
+      'Estado: **DISPONIBLE**\n' +
+      `Usuarios que han hecho RUNS: **${userCount}**\n` +
+      'Presiona **Iniciar** cuando comiencen.'
+    );
   }
   if (runs.status === 'in_progress') {
-    return '## RUNS\nEstado: **EN PROGRESO**\nCuando finalice, presiona **Terminar**.';
+    return (
+      '## RUNS\n' +
+      'Estado: **EN PROGRESO**\n' +
+      `Usuarios que han hecho RUNS: **${userCount}**\n` +
+      'Cuando finalice, presiona **Terminar**.'
+    );
   }
 
   const left = Math.max(0, (runs.cooldownEndsAt || 0) - Date.now());
-  return `## RUNS\nEstado: **EN CD (4h)**\nTiempo restante: **${formatDuration(left)}**`;
+  return (
+    '## RUNS\n' +
+    `Estado: **EN CD (${runsHours}h)**\n` +
+    `Tiempo restante: **${formatDuration(left)}**\n` +
+    `Usuarios que han hecho RUNS: **${userCount}**`
+  );
 }
 
 function buildPlantationPanelButtons() {
@@ -453,20 +586,20 @@ function createEvidenceKey(guildId, userId) {
   return `${guildId}:${userId}`;
 }
 
-function buildMaritimeTerrestrialPanelPayload() {
+function buildMaritimeTerrestrialPanelPayload(guildConfig) {
   return {
     content:
       '## Marítimo / Terrestre\n' +
-      'Marítimo tiene CD fijo de 24h y Terrestre CD fijo de 8h.\n' +
+      `Marítimo tiene CD actual de ${getCustomCooldown(guildConfig, 'maritimo')}h y Terrestre CD actual de ${getCustomCooldown(guildConfig, 'terrestre')}h.\n` +
       'Selecciona uno y luego sube la evidencia (foto). La mision se valida automáticamente.',
-    components: buildMainTaskButtons()
+    components: buildMainTaskButtons(guildConfig)
   };
 }
 
 async function buildRunsPanelPayload(guildConfig) {
   return {
     content: await buildRunsPanelText(guildConfig),
-    components: [...buildRunsButtons(guildConfig.runs.status), ...buildMainStatusButtons()]
+    components: buildRunsButtons(guildConfig.runs.status)
   };
 }
 
@@ -480,7 +613,7 @@ async function buildPlantationPanelPayload(guildConfig) {
 async function buildMissionPanelPayload(taskKey, guildConfig) {
   const normalizedTaskKey = normalizeTaskKey(taskKey);
   if (normalizedTaskKey === 'maritimo_terrestre') {
-    return buildMaritimeTerrestrialPanelPayload();
+    return buildMaritimeTerrestrialPanelPayload(guildConfig);
   }
   if (normalizedTaskKey === 'runs') {
     return buildRunsPanelPayload(guildConfig);
@@ -525,16 +658,43 @@ async function publishMissionPanel(guild, guildConfig, taskKey, options = {}) {
   const previousRef = options.ignoreExisting ? null : getMissionPanelRef(guildConfig, normalizedTaskKey);
   let panelMessage = null;
   let action = 'create';
+  let previousHandled = false;
 
   if (previousRef?.messageId && previousRef.channelId === targetChannel.id) {
     const previousMessage = await targetChannel.messages.fetch(previousRef.messageId).catch(() => null);
     if (previousMessage) {
-      try {
-        panelMessage = await previousMessage.edit(payload);
-        action = 'edit';
-      } catch (error) {
-        if (options.logPrefix) {
-          console.warn(`${options.logPrefix} tipo=${normalizedTaskKey} canal=${targetChannel.id} action=edit_failed`, error);
+      let shouldEdit = true;
+
+      if (options.ensureLast) {
+        const newerMessages = await targetChannel.messages
+          .fetch({ after: previousMessage.id, limit: 1 })
+          .catch(() => null);
+        if (newerMessages && newerMessages.size > 0) {
+          // There are newer messages — delete existing panel and re-post at the end
+          await previousMessage.delete().catch(() => null);
+          previousHandled = true;
+          shouldEdit = false;
+          action = 'repost';
+          if (options.logPrefix) {
+            console.log(
+              `${options.logPrefix} tipo=${normalizedTaskKey} canal=${targetChannel.id} action=repost (newer messages found)`
+            );
+          }
+        }
+      }
+
+      if (shouldEdit) {
+        try {
+          panelMessage = await previousMessage.edit(payload);
+          action = 'edit';
+          previousHandled = true;
+        } catch (error) {
+          if (options.logPrefix) {
+            console.warn(
+              `${options.logPrefix} tipo=${normalizedTaskKey} canal=${targetChannel.id} action=edit_failed`,
+              error
+            );
+          }
         }
       }
     }
@@ -551,6 +711,7 @@ async function publishMissionPanel(guild, guildConfig, taskKey, options = {}) {
 
   let cleanedPrevious = false;
   if (
+    !previousHandled &&
     previousRef?.messageId &&
     (previousRef.channelId !== panelMessage.channelId || previousRef.messageId !== panelMessage.id)
   ) {
@@ -562,7 +723,7 @@ async function publishMissionPanel(guild, guildConfig, taskKey, options = {}) {
     }
   }
 
-  if (options.logPrefix) {
+  if (options.logPrefix && action !== 'repost') {
     console.log(`${options.logPrefix} tipo=${normalizedTaskKey} canal=${targetChannel.id} action=${action}`);
   }
 
@@ -572,6 +733,77 @@ async function publishMissionPanel(guild, guildConfig, taskKey, options = {}) {
     messageId: panelMessage.id,
     cleanedPrevious
   };
+}
+
+async function publishAdminPanel(guild, guildConfig) {
+  const channelId = guildConfig.mainChannelId;
+  if (!channelId) return null;
+
+  const channel = await fetchMissionPanelChannel(guild, channelId);
+  if (!channel) return null;
+
+  const payload = buildAdminPanelPayload(guildConfig);
+  let panelMessage = null;
+  const previousRef = guildConfig.adminPanelRef;
+
+  if (previousRef?.messageId && previousRef.channelId === channel.id) {
+    const previousMessage = await channel.messages.fetch(previousRef.messageId).catch(() => null);
+    if (previousMessage) {
+      panelMessage = await previousMessage.edit(payload).catch(() => null);
+    }
+  }
+
+  if (!panelMessage) {
+    panelMessage = await channel.send(payload).catch(() => null);
+  }
+
+  if (panelMessage) {
+    guildConfig.adminPanelRef = { channelId: channel.id, messageId: panelMessage.id };
+  }
+
+  return panelMessage;
+}
+
+async function cleanMissionChannel(guild, guildConfig, taskKey) {
+  const normalizedTaskKey = normalizeTaskKey(taskKey);
+  const channelId = getTaskChannelId(guildConfig, normalizedTaskKey);
+  if (!channelId) return { deleted: 0, error: 'Canal no asignado' };
+
+  const channel = await fetchMissionPanelChannel(guild, channelId);
+  if (!channel) return { deleted: 0, error: 'Canal no accesible' };
+
+  const panelRef = getMissionPanelRef(guildConfig, normalizedTaskKey);
+  const panelMessageId = panelRef?.messageId || null;
+
+  const messages = await channel.messages.fetch({ limit: 100 }).catch(() => null);
+  if (!messages) return { deleted: 0, error: 'No se pudo obtener mensajes' };
+
+  const toDelete = messages.filter((m) => m.id !== panelMessageId);
+  if (toDelete.size === 0) return { deleted: 0 };
+
+  const twoWeeksAgo = Date.now() - 14 * 24 * 60 * 60 * 1000;
+  const recent = toDelete.filter((m) => m.createdTimestamp > twoWeeksAgo);
+  const old = toDelete.filter((m) => m.createdTimestamp <= twoWeeksAgo);
+
+  let deleted = 0;
+
+  if (recent.size > 1) {
+    await channel.bulkDelete(recent).catch((e) => {
+      console.error(`[clean] bulkDelete fallido canal=${channelId}: ${e.message}`);
+    });
+    deleted += recent.size;
+  } else if (recent.size === 1) {
+    await recent.first().delete().catch(() => null);
+    deleted += 1;
+  }
+
+  for (const [, msg] of old) {
+    await msg.delete().catch(() => null);
+    deleted++;
+  }
+
+  console.log(`[clean] canal=${channelId} tarea=${normalizedTaskKey} eliminados=${deleted}`);
+  return { deleted };
 }
 
 async function setupPanels(interaction, state, guildConfig) {
@@ -587,13 +819,19 @@ async function setupPanels(interaction, state, guildConfig) {
   await publishMissionPanel(interaction.guild, guildConfig, 'maritimo_terrestre');
   await publishMissionPanel(interaction.guild, guildConfig, 'runs');
   await ensurePlantationPanel(interaction.guild, guildConfig);
+  await publishAdminPanel(interaction.guild, guildConfig);
 
   writeState(state);
 }
 
 async function refreshRunsPanel(guild, guildConfig) {
   if (!getTaskChannelId(guildConfig, 'runs')) return;
-  await publishMissionPanel(guild, guildConfig, 'runs');
+  await publishMissionPanel(guild, guildConfig, 'runs', { ensureLast: true });
+}
+
+async function refreshMTPanel(guild, guildConfig) {
+  if (!getTaskChannelId(guildConfig, 'maritimo_terrestre')) return;
+  await publishMissionPanel(guild, guildConfig, 'maritimo_terrestre', { ensureLast: true });
 }
 
 function ensureTaskContainer(state, guildId) {
@@ -611,7 +849,7 @@ function ensureTaskContainer(state, guildId) {
 
 async function refreshPlantationPanel(guild, guildConfig) {
   if (!getTaskChannelId(guildConfig, 'plantacion')) return;
-  await publishMissionPanel(guild, guildConfig, 'plantacion');
+  await publishMissionPanel(guild, guildConfig, 'plantacion', { ensureLast: true });
 }
 
 async function ensurePlantationPanel(guild, guildConfig) {
@@ -712,6 +950,13 @@ async function handleRunsButton(interaction, state, guildConfig) {
 
     runs.status = 'in_progress';
     runs.notifiedReady = false;
+    runs.startedAt = Date.now();
+
+    // Track unique user
+    if (!Array.isArray(runs.uniqueUsers)) runs.uniqueUsers = [];
+    if (!runs.uniqueUsers.includes(interaction.user.id)) {
+      runs.uniqueUsers.push(interaction.user.id);
+    }
 
     addReport(state, {
       kind: 'runs_start',
@@ -742,9 +987,11 @@ async function handleRunsButton(interaction, state, guildConfig) {
       return;
     }
 
+    const runsHours = getCustomCooldown(guildConfig, 'runs');
     runs.status = 'cooldown';
-    runs.cooldownEndsAt = addHours(4);
+    runs.cooldownEndsAt = addHours(runsHours);
     runs.notifiedReady = false;
+    runs.startedAt = null;
 
     addReport(state, {
       kind: 'runs_finish',
@@ -756,14 +1003,14 @@ async function handleRunsButton(interaction, state, guildConfig) {
     writeState(state);
 
     await interaction.reply({
-      content: 'RUNS finalizada. CD de 4h iniciado.',
+      content: `RUNS finalizada. CD de ${runsHours}h iniciado.`,
       ephemeral: true
     });
 
     await notifyRunsChannel(
       interaction.guild,
       guildConfig,
-      `⏳ ${interaction.user} finalizó RUNS. Queda en cooldown por 4 horas.`
+      `⏳ ${interaction.user} finalizó RUNS. Queda en cooldown por ${runsHours} horas.`
     );
     await refreshRunsPanel(interaction.guild, guildConfig);
     writeState(state);
@@ -907,7 +1154,7 @@ async function handlePlantationActionButton(interaction, state, guildConfig) {
         );
       }
     } else {
-      task.nextCycleEndsAt = addHours(3);
+      task.nextCycleEndsAt = addHours(getCustomCooldown(guildConfig, 'plantacion'));
     }
 
     writeState(state);
@@ -923,7 +1170,7 @@ async function handlePlantationActionButton(interaction, state, guildConfig) {
     }
     task.totalCycles = 3;
     task.status = 'in_progress';
-    task.nextCycleEndsAt = addHours(3);
+    task.nextCycleEndsAt = addHours(getCustomCooldown(guildConfig, 'plantacion'));
     task.cycleReadyNotified = false;
 
     const dmSent = await notifyUserPlantation(
@@ -1100,9 +1347,41 @@ async function schedulerTick() {
 
     const tasks = ensureTaskContainer(state, guildId);
 
-    await refreshPlantationPanel(guild, guildConfig);
+    // Auto-close RUNS after 1 hour
+    if (
+      guildConfig.runs.status === 'in_progress' &&
+      guildConfig.runs.startedAt &&
+      now - guildConfig.runs.startedAt >= RUNS_AUTO_CLOSE_MS
+    ) {
+      const runsHours = getCustomCooldown(guildConfig, 'runs');
+      console.log(
+        `[auto-close] guildId=${guildId} Cerrando RUNS automaticamente por timeout de 1h`
+      );
+      guildConfig.runs.status = 'cooldown';
+      guildConfig.runs.cooldownEndsAt = now + runsHours * 60 * 60 * 1000;
+      guildConfig.runs.notifiedReady = false;
+      guildConfig.runs.startedAt = null;
 
-    if (guildConfig.runs.status === 'cooldown' && guildConfig.runs.cooldownEndsAt && now >= guildConfig.runs.cooldownEndsAt) {
+      addReport(state, {
+        kind: 'runs_auto_close',
+        guildId,
+        createdAt: now
+      });
+
+      await notifyRunsChannel(
+        guild,
+        guildConfig,
+        `⏰ RUNS cerrada automáticamente por superar 1 hora sin finalizar. CD de ${runsHours}h iniciado.`
+      );
+      changed = true;
+    }
+
+    // Handle RUNS cooldown end
+    if (
+      guildConfig.runs.status === 'cooldown' &&
+      guildConfig.runs.cooldownEndsAt &&
+      now >= guildConfig.runs.cooldownEndsAt
+    ) {
       if (!guildConfig.runs.notifiedReady) {
         await notifyRunsChannel(guild, guildConfig, '🔔 @everyone RUNS esta disponible nuevamente.');
       }
@@ -1110,13 +1389,14 @@ async function schedulerTick() {
       guildConfig.runs.cooldownEndsAt = null;
       guildConfig.runs.notifiedReady = true;
       changed = true;
-      await refreshRunsPanel(guild, guildConfig);
-    } else if (guildConfig.runs.status === 'cooldown') {
-      await refreshRunsPanel(guild, guildConfig);
-    } else {
-      await refreshRunsPanel(guild, guildConfig);
     }
 
+    // Refresh all mission panels (ensureLast ensures panel is always the latest message)
+    await refreshMTPanel(guild, guildConfig);
+    await refreshRunsPanel(guild, guildConfig);
+    await refreshPlantationPanel(guild, guildConfig);
+
+    // Process MT cooldown expirations
     const activeMts = [];
     for (const task of tasks.maritimeTerrestrial) {
       if (task.endsAt <= now) {
@@ -1134,6 +1414,7 @@ async function schedulerTick() {
     }
     tasks.maritimeTerrestrial = activeMts;
 
+    // Process plantation cycle notifications
     for (const task of tasks.plantation) {
       if (task.status !== 'in_progress') continue;
       if (!task.nextCycleEndsAt) continue;
@@ -1155,14 +1436,49 @@ async function schedulerTick() {
       await updatePlantationTaskMessage(guild, task);
     }
 
+    // Vender (Bolsa y Porro) cyclic task
+    if (!guildConfig.vender) {
+      guildConfig.vender = { active: false, nextNotificationAt: null, pendingDelete: null };
+    }
+    const vender = guildConfig.vender;
+
+    // Delete pending vender message if its time has come
+    if (vender.pendingDelete && now >= vender.pendingDelete.deleteAt) {
+      const venderCh = await guild.channels.fetch(vender.pendingDelete.channelId).catch(() => null);
+      if (venderCh && typeof venderCh.send === 'function') {
+        const venderMsg = await venderCh.messages.fetch(vender.pendingDelete.messageId).catch(() => null);
+        if (venderMsg) {
+          await venderMsg.delete().catch(() => null);
+          console.log(`[vender] guildId=${guildId} Mensaje de vender eliminado tras ${VENDER_DELETE_DELAY_MS / 60000} min`);
+        }
+      }
+      vender.pendingDelete = null;
+      changed = true;
+    }
+
+    // Send new vender notification if active and due
+    if (vender.active && (!vender.nextNotificationAt || now >= vender.nextNotificationAt)) {
+      const mainCh = await guild.channels.fetch(guildConfig.mainChannelId || '').catch(() => null);
+      if (mainCh && typeof mainCh.send === 'function') {
+        const sentMsg = await mainCh
+          .send('@everyone 🛒 ¡Es hora de **Vender (Bolsa y Porro)**!')
+          .catch(() => null);
+        if (sentMsg) {
+          vender.pendingDelete = {
+            channelId: mainCh.id,
+            messageId: sentMsg.id,
+            deleteAt: now + VENDER_DELETE_DELAY_MS
+          };
+          console.log(`[vender] guildId=${guildId} Notificacion enviada, se borrara en ${VENDER_DELETE_DELAY_MS / 60000} min`);
+        }
+      }
+      vender.nextNotificationAt = now + VENDER_NOTIFICATION_INTERVAL_MS;
+      changed = true;
+    }
   }
 
-  if (changed) {
-    writeState(state);
-  } else {
-    // Save if pending evidence cleanup removed entries.
-    writeState(state);
-  }
+  // Always persist state (includes pending evidence cleanup)
+  writeState(state);
 }
 
 client.on(Events.MessageCreate, async (message) => {
@@ -1197,7 +1513,7 @@ client.on(Events.MessageCreate, async (message) => {
       status: 'in_progress',
       cycleReadyNotified: false,
       createdAt: Date.now(),
-      nextCycleEndsAt: addHours(3)
+      nextCycleEndsAt: addHours(getCustomCooldown(guildConfig, 'plantacion'))
     };
 
     const taskMessage = await message.channel.send({
@@ -1359,6 +1675,45 @@ client.on(Events.InteractionCreate, async (interaction) => {
       });
       return;
     }
+
+    if (interaction.commandName === 'config_cd') {
+      if (!isAdmin(interaction)) {
+        await interaction.reply({
+          content: '⛔ Solo administradores pueden usar este comando.',
+          ephemeral: true
+        });
+        return;
+      }
+
+      const tipoCd = interaction.options.getString('tarea', true);
+      const horas = interaction.options.getInteger('horas', true);
+
+      if (!guildConfig.customCooldowns) guildConfig.customCooldowns = {};
+      guildConfig.customCooldowns[tipoCd] = horas;
+      writeState(state);
+
+      // Refresh MT panel if CD affects button labels
+      if (tipoCd === 'maritimo' || tipoCd === 'terrestre') {
+        try {
+          await publishMissionPanel(interaction.guild, guildConfig, 'maritimo_terrestre', {
+            logPrefix: '[config_cd]'
+          });
+          writeState(state);
+        } catch (e) {
+          console.error('[config_cd] Error al refrescar panel MT:', e);
+        }
+      }
+
+      // Refresh admin panel to show updated CDs
+      await publishAdminPanel(interaction.guild, guildConfig);
+      writeState(state);
+
+      await interaction.reply({
+        content: `✅ CD para **${tipoCd}** actualizado a **${horas}h**.`,
+        ephemeral: true
+      });
+      return;
+    }
   }
 
   if (!interaction.isButton()) return;
@@ -1403,16 +1758,191 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
+    // Legacy button kept for backward compatibility
     if (interaction.customId === 'main:plant-panel') {
+      if (!isAdmin(interaction)) {
+        await interaction.reply({ content: '⛔ Solo administradores pueden usar esta accion.', ephemeral: true });
+        return;
+      }
       setMissionPanelRef(guildConfig, 'plantacion', null);
-      await publishMissionPanel(interaction.guild, guildConfig, 'plantacion');
+      await publishMissionPanel(interaction.guild, guildConfig, 'plantacion', { ignoreExisting: true });
       writeState(state);
-
       const channelId = getTaskChannelId(guildConfig, 'plantacion');
       await interaction.reply({
         content:
           `Panel de Plantacion recreado en ${formatAssignedChannel(channelId)}.\n` +
           'Si no lo ves, revisa permisos del bot en ese canal.',
+        ephemeral: true
+      });
+      return;
+    }
+
+    // List pending evidence
+    if (interaction.customId === 'main:list-evidence') {
+      if (!isAdmin(interaction)) {
+        await interaction.reply({ content: '⛔ Solo administradores pueden usar esta accion.', ephemeral: true });
+        return;
+      }
+
+      const pending = Object.entries(state.pendingEvidence).filter(
+        ([, e]) => e.guildId === interaction.guildId
+      );
+
+      if (!pending.length) {
+        await interaction.reply({ content: 'No hay evidencias pendientes.', ephemeral: true });
+        return;
+      }
+
+      // Discord allows max 25 buttons (5 rows × 5 buttons)
+      const displayPending = pending.slice(0, 25);
+      const overflowCount = pending.length - displayPending.length;
+
+      const lines = displayPending.map(
+        ([, e]) =>
+          `- <@${e.userId}> | **${e.taskType}** (${e.cooldownHours}h) | registrado <t:${Math.floor(e.createdAt / 1000)}:R>`
+      );
+
+      const buttons = displayPending.map(([key, e], idx) =>
+        new ButtonBuilder()
+          .setCustomId(`main:cancel-evidence:${key}`)
+          .setLabel(`Cancelar #${idx + 1} ${e.taskType}`)
+          .setStyle(ButtonStyle.Danger)
+      );
+
+      const rows = [];
+      for (let i = 0; i < buttons.length; i += 5) {
+        rows.push(new ActionRowBuilder().addComponents(buttons.slice(i, i + 5)));
+      }
+
+      const overflowNote = overflowCount > 0 ? `\n_...y ${overflowCount} más (expiran automáticamente)._` : '';
+      await interaction.reply({
+        content: `## Evidencias pendientes\n${lines.join('\n')}${overflowNote}`,
+        components: rows,
+        ephemeral: true
+      });
+      return;
+    }
+
+    // Cancel specific pending evidence
+    if (interaction.customId.startsWith('main:cancel-evidence:')) {
+      if (!isAdmin(interaction)) {
+        await interaction.reply({ content: '⛔ Solo administradores pueden usar esta accion.', ephemeral: true });
+        return;
+      }
+      const evidenceKey = interaction.customId.replace('main:cancel-evidence:', '');
+      if (state.pendingEvidence[evidenceKey]) {
+        const pendingEntry = state.pendingEvidence[evidenceKey];
+        delete state.pendingEvidence[evidenceKey];
+        writeState(state);
+        await interaction.reply({
+          content: `✅ Evidencia de <@${pendingEntry.userId}> (${pendingEntry.taskType}) cancelada.`,
+          ephemeral: true
+        });
+      } else {
+        await interaction.reply({
+          content: 'Esa evidencia ya no existe o fue procesada.',
+          ephemeral: true
+        });
+      }
+      return;
+    }
+
+    // Regenerate any mission panel
+    if (interaction.customId.startsWith('main:regen-panel:')) {
+      if (!isAdmin(interaction)) {
+        await interaction.reply({ content: '⛔ Solo administradores pueden usar esta accion.', ephemeral: true });
+        return;
+      }
+      const taskKey = interaction.customId.replace('main:regen-panel:', '');
+      const taskSettings = getTaskSettings(taskKey);
+      if (!taskSettings) {
+        await interaction.reply({ content: `Tipo de tarea no soportado: **${taskKey}**.`, ephemeral: true });
+        return;
+      }
+      setMissionPanelRef(guildConfig, taskKey, null);
+      await publishMissionPanel(interaction.guild, guildConfig, taskKey, { ignoreExisting: true });
+      writeState(state);
+      const channelId = getTaskChannelId(guildConfig, taskKey);
+      await interaction.reply({
+        content:
+          `Panel de **${taskSettings.label}** recreado en ${formatAssignedChannel(channelId)}.\n` +
+          'Si no lo ves, revisa permisos del bot en ese canal.',
+        ephemeral: true
+      });
+      return;
+    }
+
+    // Clean mission channel
+    if (interaction.customId.startsWith('main:clean:')) {
+      if (!isAdmin(interaction)) {
+        await interaction.reply({ content: '⛔ Solo administradores pueden usar esta accion.', ephemeral: true });
+        return;
+      }
+      const taskKey = interaction.customId.replace('main:clean:', '');
+      const taskSettings = getTaskSettings(taskKey);
+      if (!taskSettings) {
+        await interaction.reply({ content: `Tipo de tarea no soportado: **${taskKey}**.`, ephemeral: true });
+        return;
+      }
+
+      await interaction.deferReply({ ephemeral: true });
+
+      const cleanResult = await cleanMissionChannel(interaction.guild, guildConfig, taskKey);
+
+      if (cleanResult.error) {
+        await interaction.editReply({ content: `Error al limpiar canal: ${cleanResult.error}` });
+        return;
+      }
+
+      // Force re-publish panel at end of channel
+      setMissionPanelRef(guildConfig, taskKey, null);
+      try {
+        await publishMissionPanel(interaction.guild, guildConfig, taskKey, { ignoreExisting: true });
+        writeState(state);
+      } catch (e) {
+        console.error(`[clean] Error al republicar panel de ${taskKey}:`, e);
+      }
+
+      await interaction.editReply({
+        content:
+          `✅ Canal de **${taskSettings.label}** limpiado: **${cleanResult.deleted}** mensajes eliminados.\n` +
+          'Panel de misión republicado al final del canal.'
+      });
+      return;
+    }
+
+    // Toggle Vender cyclic task
+    if (interaction.customId === 'main:vender-toggle') {
+      if (!isAdmin(interaction)) {
+        await interaction.reply({ content: '⛔ Solo administradores pueden usar esta accion.', ephemeral: true });
+        return;
+      }
+
+      if (!guildConfig.vender) {
+        guildConfig.vender = { active: false, nextNotificationAt: null, pendingDelete: null };
+      }
+
+      guildConfig.vender.active = !guildConfig.vender.active;
+
+      if (guildConfig.vender.active) {
+        // Send first notification immediately on next tick
+        if (!guildConfig.vender.nextNotificationAt) {
+          guildConfig.vender.nextNotificationAt = Date.now();
+        }
+        console.log(`[vender] guildId=${interaction.guildId} Notificacion Vender activada por ${interaction.user.tag}`);
+      } else {
+        guildConfig.vender.nextNotificationAt = null;
+        console.log(`[vender] guildId=${interaction.guildId} Notificacion Vender detenida por ${interaction.user.tag}`);
+      }
+
+      writeState(state);
+      await publishAdminPanel(interaction.guild, guildConfig);
+      writeState(state);
+
+      await interaction.reply({
+        content: guildConfig.vender.active
+          ? '✅ Notificación **Vender (Bolsa y Porro)** activada. Se enviará cada 40 min y se borrará a los 10 min.'
+          : '⛔ Notificación **Vender (Bolsa y Porro)** detenida.',
         ephemeral: true
       });
       return;
