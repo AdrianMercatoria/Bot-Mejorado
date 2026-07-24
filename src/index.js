@@ -160,6 +160,7 @@ function getGuildState(state, guildId) {
       maritimeTerrestrialPanelMessageId: null,
       runsPanelMessageId: null,
       plantationPanelMessageId: null,
+      venderPanelMessageId: null,
       responseChannels: {},
       missionPanels: {},
       adminPanelRef: null,
@@ -186,6 +187,9 @@ function getGuildState(state, guildId) {
   }
   if (state.guilds[guildId].venderChannelId === undefined) {
     state.guilds[guildId].venderChannelId = null;
+  }
+  if (state.guilds[guildId].venderPanelMessageId === undefined) {
+    state.guilds[guildId].venderPanelMessageId = null;
   }
 
   const runs = state.guilds[guildId].runs;
