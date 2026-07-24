@@ -458,7 +458,7 @@ function buildMaritimeTerrestrialPanelPayload() {
     content:
       '## Marítimo / Terrestre\n' +
       'Marítimo tiene CD fijo de 24h y Terrestre CD fijo de 8h.\n' +
-      'Selecciona uno y luego sube la evidencia (foto). La mision se valida automaticamente.',
+      'Selecciona uno y luego sube la evidencia (foto). La mision se valida automáticamente.',
     components: buildMainTaskButtons()
   };
 }
@@ -488,7 +488,7 @@ async function buildMissionPanelPayload(taskKey, guildConfig) {
   if (normalizedTaskKey === 'plantacion') {
     return buildPlantationPanelPayload(guildConfig);
   }
-  throw new Error(`Tipo de panel no soportado: ${taskKey}`);
+  throw new Error(`Tipo de panel no soportado: ${normalizedTaskKey}`);
 }
 
 async function fetchMissionPanelChannel(guild, channelId) {
@@ -727,7 +727,7 @@ async function handleRunsButton(interaction, state, guildConfig) {
       ephemeral: true
     });
 
-    await notifyRunsChannel(interaction.guild, guildConfig, `🚀 ${interaction.user} inicio una RUNS.`);
+    await notifyRunsChannel(interaction.guild, guildConfig, `🚀 ${interaction.user} inició una RUNS.`);
     await refreshRunsPanel(interaction.guild, guildConfig);
     writeState(state);
     return;
@@ -763,7 +763,7 @@ async function handleRunsButton(interaction, state, guildConfig) {
     await notifyRunsChannel(
       interaction.guild,
       guildConfig,
-      `⏳ ${interaction.user} finalizo RUNS. Queda en cooldown por 4 horas.`
+      `⏳ ${interaction.user} finalizó RUNS. Queda en cooldown por 4 horas.`
     );
     await refreshRunsPanel(interaction.guild, guildConfig);
     writeState(state);
