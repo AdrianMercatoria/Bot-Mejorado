@@ -69,7 +69,8 @@ const commands = [
         .addChoices(
           { name: 'Maritimo/Terrestre', value: 'maritimo_terrestre' },
           { name: 'RUNS', value: 'runs' },
-          { name: 'Plantacion', value: 'plantacion' }
+          { name: 'Plantacion', value: 'plantacion' },
+          { name: 'Vender (Bolsa y Porro)', value: 'vender' }
         )
     )
     .addChannelOption((opt) =>
@@ -120,6 +121,11 @@ const TASK_SETTINGS = {
     channelField: 'plantationChannelId',
     panelField: 'plantationPanelMessageId',
     label: 'Plantación'
+  },
+  vender: {
+    channelField: 'venderChannelId',
+    panelField: 'venderPanelMessageId',
+    label: 'Vender (Bolsa y Porro)'
   }
 };
 
@@ -129,7 +135,8 @@ const TASK_ALIASES = {
   maritime_terrestrial: 'maritimo_terrestre',
   runs: 'runs',
   plantacion: 'plantacion',
-  plantation: 'plantacion'
+  plantation: 'plantacion',
+  vender: 'vender'
 };
 
 async function registerCommands() {
@@ -149,6 +156,7 @@ function getGuildState(state, guildId) {
       maritimeTerrestrialChannelId: null,
       runsChannelId: null,
       plantationChannelId: null,
+      venderChannelId: null,
       maritimeTerrestrialPanelMessageId: null,
       runsPanelMessageId: null,
       plantationPanelMessageId: null,
@@ -175,6 +183,9 @@ function getGuildState(state, guildId) {
   }
   if (state.guilds[guildId].plantationPanelMessageId === undefined) {
     state.guilds[guildId].plantationPanelMessageId = null;
+  }
+  if (state.guilds[guildId].venderChannelId === undefined) {
+    state.guilds[guildId].venderChannelId = null;
   }
 
   const runs = state.guilds[guildId].runs;
@@ -384,9 +395,9 @@ function getTaskChannelId(guildConfig, taskKey) {
   const normalizedTaskKey = normalizeTaskKey(taskKey);
   const settings = getTaskSettings(normalizedTaskKey);
   if (settings) {
-    return guildConfig.responseChannels[normalizedTaskKey] || guildConfig[settings.channelField] || guildConfig.mainChannelId || null;
+    return guildConfig.responseChannels[normalizedTaskKey] || guildConfig[settings.channelField] || null;
   }
-  return guildConfig.mainChannelId || null;
+  return null;
 }
 
 function setTaskChannelId(guildConfig, taskKey, channelId) {
@@ -448,12 +459,14 @@ function buildChannelAssignmentText(guildConfig) {
   const mtChannelId = getTaskChannelId(guildConfig, 'maritimo_terrestre');
   const runsChannelId = getTaskChannelId(guildConfig, 'runs');
   const plantationChannelId = getTaskChannelId(guildConfig, 'plantacion');
+  const venderChannelId = getTaskChannelId(guildConfig, 'vender');
 
   return [
     '### Canales de respuesta',
     `- Maritimo/Terrestre -> ${formatAssignedChannel(mtChannelId)}`,
     `- RUNS -> ${formatAssignedChannel(runsChannelId)}`,
-    `- Plantacion -> ${formatAssignedChannel(plantationChannelId)}`
+    `- Plantacion -> ${formatAssignedChannel(plantationChannelId)}`,
+    `- Vender -> ${formatAssignedChannel(venderChannelId)}`
   ].join('\n');
 }
 
@@ -810,15 +823,7 @@ async function setupPanels(interaction, state, guildConfig) {
   const channel = interaction.channel;
 
   guildConfig.mainChannelId = channel.id;
-  setTaskChannelId(guildConfig, 'maritimo_terrestre', channel.id);
-  setTaskChannelId(guildConfig, 'runs', channel.id);
-  if (!getTaskChannelId(guildConfig, 'plantacion')) {
-    setTaskChannelId(guildConfig, 'plantacion', channel.id);
-  }
 
-  await publishMissionPanel(interaction.guild, guildConfig, 'maritimo_terrestre');
-  await publishMissionPanel(interaction.guild, guildConfig, 'runs');
-  await ensurePlantationPanel(interaction.guild, guildConfig);
   await publishAdminPanel(interaction.guild, guildConfig);
 
   writeState(state);
@@ -1458,19 +1463,24 @@ async function schedulerTick() {
 
     // Send new vender notification if active and due
     if (vender.active && (!vender.nextNotificationAt || now >= vender.nextNotificationAt)) {
-      const mainCh = await guild.channels.fetch(guildConfig.mainChannelId || '').catch(() => null);
-      if (mainCh && typeof mainCh.send === 'function') {
-        const sentMsg = await mainCh
-          .send('@everyone 🛒 ¡Es hora de **Vender (Bolsa y Porro)**!')
-          .catch(() => null);
-        if (sentMsg) {
-          vender.pendingDelete = {
-            channelId: mainCh.id,
-            messageId: sentMsg.id,
-            deleteAt: now + VENDER_DELETE_DELAY_MS
-          };
-          console.log(`[vender] guildId=${guildId} Notificacion enviada, se borrara en ${VENDER_DELETE_DELAY_MS / 60000} min`);
+      const venderChannelId = getTaskChannelId(guildConfig, 'vender');
+      if (venderChannelId) {
+        const venderCh = await guild.channels.fetch(venderChannelId).catch(() => null);
+        if (venderCh && typeof venderCh.send === 'function') {
+          const sentMsg = await venderCh
+            .send('@everyone 🛒 ¡Es hora de **Vender (Bolsa y Porro)**!')
+            .catch(() => null);
+          if (sentMsg) {
+            vender.pendingDelete = {
+              channelId: venderCh.id,
+              messageId: sentMsg.id,
+              deleteAt: now + VENDER_DELETE_DELAY_MS
+            };
+            console.log(`[vender] guildId=${guildId} Notificacion enviada, se borrara en ${VENDER_DELETE_DELAY_MS / 60000} min`);
+          }
         }
+      } else {
+        console.warn(`[vender] guildId=${guildId} Canal no asignado, saltando notificacion. Usa /asignar_canal tarea:vender`);
       }
       vender.nextNotificationAt = now + VENDER_NOTIFICATION_INTERVAL_MS;
       changed = true;
@@ -1617,9 +1627,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await setupPanels(interaction, state, guildConfig);
       await interaction.reply({
         content:
-          'Canal Main configurado y paneles creados.\n' +
-          'Este canal recibira reportes y notificaciones automáticas.\n' +
-          'Puedes reasignar canales con /asignar_canal.',
+          'Canal Main configurado. Panel de Administración creado.\n' +
+          'Usa `/asignar_canal` para configurar el canal de cada misión.\n' +
+          'Los paneles de misión se publicarán al asignar su canal.',
         ephemeral: true
       });
       return;
@@ -1651,19 +1661,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       writeState(state);
 
-      let panelStatusText = 'La asignación se guardó, pero no pude publicar el panel. Revisa permisos del bot en ese canal.';
-      try {
-        const publishResult = await publishMissionPanel(interaction.guild, guildConfig, taskKey, {
-          logPrefix: '[asignar_canal]'
-        });
-        writeState(state);
-        panelStatusText =
-          `La asignación se guardó y el panel se ${publishResult.action === 'edit' ? 'actualizó' : 'publicó'} de inmediato.`;
-      } catch (error) {
-        console.error(
-          `[asignar_canal] tipo=${taskKey} canal=${targetChannel.id} action=failed`,
-          error
-        );
+      let panelStatusText = 'La asignación se guardó. Las notificaciones se enviarán a este canal.';
+      if (taskKey !== 'vender') {
+        panelStatusText = 'La asignación se guardó, pero no pude publicar el panel. Revisa permisos del bot en ese canal.';
+        try {
+          const publishResult = await publishMissionPanel(interaction.guild, guildConfig, taskKey, {
+            logPrefix: '[asignar_canal]'
+          });
+          writeState(state);
+          panelStatusText =
+            `La asignación se guardó y el panel se ${publishResult.action === 'edit' ? 'actualizó' : 'publicó'} de inmediato.`;
+        } catch (error) {
+          console.error(
+            `[asignar_canal] tipo=${taskKey} canal=${targetChannel.id} action=failed`,
+            error
+          );
+        }
       }
 
       await interaction.reply({
