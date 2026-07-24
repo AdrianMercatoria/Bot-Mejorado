@@ -5,6 +5,7 @@ Bot para gestionar tareas de:
 - Terrestre
 - Runs
 - Plantacion
+- Vender (Bolsa y Porro) — tarea cíclica automática
 
 ## Inicio rápido
 
@@ -56,8 +57,10 @@ Bot para gestionar tareas de:
 1. Ve al canal que quieras usar como Main.
 2. Ejecuta `/setup`.
 3. El bot creara:
-   - Panel de Maritimo/Terrestre
-   - Panel de Runs (incluye botones `Ver estado`, `Ver canales` y `Recrear panel Plantacion`)
+   - Panel de Marítimo/Terrestre
+   - Panel de RUNS (solo botones **Iniciar** y **Terminar**)
+   - Panel de Plantacion
+   - **Panel de Administración** (con todos los controles de admin)
 4. Todos los reportes y notificaciones se enviaran por defecto al canal donde se ejecuto `/setup`.
 5. Si quieres enviar cada tarea a canales distintos, usa:
    - `/asignar_canal tarea:Maritimo/Terrestre canal:#canal`
@@ -65,11 +68,38 @@ Bot para gestionar tareas de:
    - `/asignar_canal tarea:Plantacion canal:#canal`
 
 ## Flujo Rapido
-- Maritimo/Terrestre: Maritimo tiene CD fijo de 24h y Terrestre CD fijo de 8h. Seleccionas una opcion, subes evidencia (foto) y el bot valida automaticamente la mision.
-- Runs: mensaje unico persistente con estado y boton para iniciar/finalizar. Al terminar entra a CD 4h y luego notifica disponibilidad.
-- Boton `Ver estado` en Main: muestra estado actual, quien hizo Maritimo/Terrestre y cuantos usuarios iniciaron RUNS.
-- Boton `Ver canales` en Main: muestra a que canal responde cada tarea.
-- Boton `Recrear panel Plantacion` en Main: vuelve a enviar el panel de Plantacion en su canal asignado.
-- Plantacion: panel con botones `Ramas` y `Duplicado`.
-- Flujo Plantacion `Ramas`: eliges `Ramas`, escribes cantidad de semillas, inicia ciclo 1/2 (3h cada ciclo), marcas cada ciclo, y al completar 2/2 aparece opcion para agregar un ciclo extra o finalizar.
-- Flujo Plantacion `Duplicado`: eliges `Duplicado`, escribes cantidad de semillas y haces un ciclo unico de 3h para finalizar.
+- **Maritimo/Terrestre**: Seleccionas una opcion, subes evidencia (foto) y el bot valida automaticamente la mision. CD configurable con `/config_cd`.
+- **RUNS**: Panel simplificado con solo **Iniciar** y **Terminar**. Al terminar entra a CD (4h por defecto) y luego notifica disponibilidad. Auto-cierre a 1 hora si no se termina manualmente.
+- **Plantacion**: Panel con botones `Ramas` y `Duplicado`.
+- **Vender (Bolsa y Porro)**: Notificación cíclica a @everyone cada 40 minutos. El mensaje se borra automaticamente a los 10 minutos. Se controla desde el Panel de Administración.
+
+## Nuevas Funciones (Admin)
+
+### Panel de Administración
+Publicado automáticamente en el canal Main. Contiene:
+- **Ver estado** — Estado actual de todas las tareas
+- **Ver canales** — Canales asignados por tarea
+- **Evidencias pendientes** — Lista y permite cancelar evidencias no enviadas
+- **Recrear panel MT/RUNS/Plantacion** — Fuerza republicar cada panel
+- **Limpiar canal MT/RUNS/Plantacion** — Elimina mensajes viejos y republica el panel
+- **▶️ Iniciar / ⛔ Detener Vender** — Controla la notificación cíclica de Vender
+
+### Paneles siempre como último mensaje
+Los paneles de misión (MT, RUNS, Plantacion) se reposicionan automáticamente al final del canal si hay mensajes más recientes. El scheduler los verifica cada 30 segundos.
+
+### Comando `/config_cd`
+Permite a administradores cambiar el cooldown de cualquier tarea:
+- `/config_cd tarea:Maritimo horas:24`
+- `/config_cd tarea:Terrestre horas:8`
+- `/config_cd tarea:RUNS horas:4`
+- `/config_cd tarea:Plantacion (ciclo) horas:3`
+
+### Auto-cierre de RUNS
+Si una RUNS lleva más de 1 hora en progreso sin ser finalizada manualmente, el bot la cierra automáticamente y aplica el CD configurado. Se registra en el log del servidor.
+
+### Estado de RUNS con usuarios
+El panel de RUNS muestra cuántos usuarios únicos han iniciado RUNS desde que se rastrean los datos.
+
+## Flujo Plantacion
+- **Ramas**: eliges `Ramas`, escribes cantidad de semillas, inicia ciclo 1/2 (3h por defecto por ciclo), marcas cada ciclo, y al completar 2/2 aparece opcion para agregar un ciclo extra o finalizar.
+- **Duplicado**: eliges `Duplicado`, escribes cantidad de semillas y haces un ciclo unico de 3h para finalizar.
