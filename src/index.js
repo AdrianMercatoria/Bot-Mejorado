@@ -86,7 +86,7 @@ const TASK_SETTINGS = {
   maritimo_terrestre: {
     channelField: 'maritimeTerrestrialChannelId',
     panelField: 'maritimeTerrestrialPanelMessageId',
-    label: 'Maritimo/Terrestre'
+    label: 'Marítimo/Terrestre'
   },
   runs: {
     channelField: 'runsChannelId',
@@ -96,7 +96,7 @@ const TASK_SETTINGS = {
   plantacion: {
     channelField: 'plantationChannelId',
     panelField: 'plantationPanelMessageId',
-    label: 'Plantacion'
+    label: 'Plantación'
   }
 };
 
@@ -425,8 +425,8 @@ async function buildPlantationPanelText(guildConfig) {
   return (
     '## Plantacion\n' +
     'Selecciona el tipo de mision:\n' +
-    '- **Ramas**: 2 ciclos de 3h, con opcion de ciclo extra al final.\n' +
-    '- **Duplicado**: 1 ciclo unico de 3h.'
+    '- **Ramas**: 2 ciclos de 3h, con opción de ciclo extra al final.\n' +
+    '- **Duplicado**: 1 ciclo único de 3h.'
   );
 }
 
@@ -456,8 +456,8 @@ function createEvidenceKey(guildId, userId) {
 function buildMaritimeTerrestrialPanelPayload() {
   return {
     content:
-      '## Maritimo / Terrestre\n' +
-      'Maritimo tiene CD fijo de 24h y Terrestre CD fijo de 8h.\n' +
+      '## Marítimo / Terrestre\n' +
+      'Marítimo tiene CD fijo de 24h y Terrestre CD fijo de 8h.\n' +
       'Selecciona uno y luego sube la evidencia (foto). La mision se valida automaticamente.',
     components: buildMainTaskButtons()
   };
@@ -1335,14 +1335,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       writeState(state);
 
-      let panelStatusText = 'La asignacion se guardo, pero no pude publicar el panel. Revisa permisos del bot en ese canal.';
+      let panelStatusText = 'La asignación se guardó, pero no pude publicar el panel. Revisa permisos del bot en ese canal.';
       try {
         const publishResult = await publishMissionPanel(interaction.guild, guildConfig, taskKey, {
           logPrefix: '[asignar_canal]'
         });
         writeState(state);
         panelStatusText =
-          `La asignacion se guardo y el panel se ${publishResult.action === 'edit' ? 'actualizo' : 'publico'} de inmediato.`;
+          `La asignación se guardó y el panel se ${publishResult.action === 'edit' ? 'actualizó' : 'publicó'} de inmediato.`;
       } catch (error) {
         console.error(
           `[asignar_canal] tipo=${taskKey} canal=${targetChannel.id} action=failed`,
@@ -1352,7 +1352,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       await interaction.reply({
         content:
-          `Asignacion actualizada para **${taskSettings.label}** en ${targetChannel}.\n` +
+          `Asignación actualizada para **${taskSettings.label}** en ${targetChannel}.\n` +
           `${panelStatusText}\n\n` +
           buildChannelAssignmentText(guildConfig),
         ephemeral: true
