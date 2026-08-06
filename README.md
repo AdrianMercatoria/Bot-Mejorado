@@ -80,6 +80,7 @@ Publicado automáticamente en el canal Main. Contiene:
 - **Ver estado** — Estado actual de todas las tareas
 - **Ver canales** — Canales asignados por tarea
 - **Evidencias pendientes** — Lista y permite cancelar evidencias no enviadas
+- **📊 Estadisticas** — Estadisticas generales por mision en un rango de tiempo
 - **Recrear panel MT/RUNS/Plantacion** — Fuerza republicar cada panel
 - **Limpiar canal MT/RUNS/Plantacion** — Elimina mensajes viejos y republica el panel
 - **▶️ Iniciar / ⛔ Detener Vender** — Controla la notificación cíclica de Vender
@@ -94,6 +95,20 @@ Permite a administradores cambiar el cooldown de cualquier tarea:
 - `/config_cd tarea:RUNS horas:4`
 - `/config_cd tarea:Plantacion (ciclo) horas:3`
 
+### Estadisticas por mision y por periodo
+Boton **📊 Estadisticas** del Panel de Administración, o comando `/estadisticas`.
+
+Muestra, para cada mision (Marítimo, Terrestre, RUNS, Plantacion): total de misiones, usuarios distintos y ranking de quien la hizo (top 10). En RUNS ademas separa iniciadas / finalizadas / cerradas automaticamente; en Plantacion suma ciclos marcados y semillas usadas.
+
+El boton abre con los ultimos 7 dias y trae un menu para cambiar el periodo (24h, 7 dias, 30 dias, historico). Para rangos exactos usa el comando:
+- `/estadisticas rango:Ultimas 24 horas`
+- `/estadisticas desde:2026-08-01 hasta:2026-08-05`
+- `/estadisticas desde:2026-08-01 14:00 hasta:2026-08-02 20:30`
+
+Formatos aceptados: `YYYY-MM-DD`, `YYYY-MM-DD HH:MM`, `DD/MM/YYYY`. Sin hora, `desde` toma las 00:00 y `hasta` las 23:59. Si llenas `desde`/`hasta`, tienen prioridad sobre `rango`. Las fechas se interpretan en la zona horaria del equipo donde corre el bot.
+
+> Los datos salen del historial de reportes, limitado a los ultimos 3000 registros. El "historico completo" llega hasta ahi.
+
 ### Auto-cierre de RUNS
 Si una RUNS lleva más de 1 hora en progreso sin ser finalizada manualmente, el bot la cierra automáticamente y aplica el CD configurado. Se registra en el log del servidor.
 
@@ -103,3 +118,10 @@ El panel de RUNS muestra cuántos usuarios únicos han iniciado RUNS desde que s
 ## Flujo Plantacion
 - **Ramas**: eliges `Ramas`, escribes cantidad de semillas, inicia ciclo 1/2 (3h por defecto por ciclo), marcas cada ciclo, y al completar 2/2 aparece opcion para agregar un ciclo extra o finalizar.
 - **Duplicado**: eliges `Duplicado`, escribes cantidad de semillas y haces un ciclo unico de 3h para finalizar.
+
+## Verificacion Visual
+Abre `preview/panel-preview.html` en el navegador para simular los paneles sin Discord: Maritimo/Terrestre, RUNS, Plantacion, asignacion de canales y los botones del Main (`Ver estado`, `Ver canales`, `Recrear panel Plantacion`, `Estadisticas`).
+
+La tarjeta de `Estadisticas` trae historial simulado de los ultimos 30 dias para que el filtro por periodo se note, y se actualiza en vivo con lo que hagas en la demo. Los tiempos estan acelerados (CD de RUNS = 40s, ciclos de plantacion = 25s). `Recrear todo` reinicia el estado y regenera el historial simulado.
+
+> El preview todavia no simula las funciones mas nuevas (Vender, Evidencias pendientes, Limpiar canal).

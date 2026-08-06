@@ -101,7 +101,8 @@
       font-weight: 600;
     }
 
-    input[type="number"] {
+    input[type="number"],
+    input[type="date"] {
       border: 1px solid var(--line);
       border-radius: 10px;
       padding: 8px 10px;
@@ -205,6 +206,7 @@
         </div>
         <div class="row">
           <button id="main-estado" class="secondary">Ver estado (Main)</button>
+          <button id="main-stats" class="primary">Estadisticas (Main)</button>
           <button id="main-canales" class="secondary">Ver canales (Main)</button>
           <button id="main-plant-panel" class="secondary">Recrear panel Plantacion</button>
           <button id="main-recreate-all" class="secondary">Recrear todo</button>
@@ -239,6 +241,32 @@
       <div id="main-status" class="console" style="margin-top: 8px; min-height: 120px; max-height: 220px;"></div>
     </section>
 
+    <section class="card" style="margin-top: 16px; display: none;" id="stats-card">
+      <h2>Estadisticas generales (Main)</h2>
+      <p class="muted">
+        Totales por mision, usuarios distintos y ranking de quien la hizo, filtrado por periodo.
+        La demo trae historial simulado de los ultimos 30 dias para que el filtro se note.
+      </p>
+      <div class="row">
+        <label for="stats-range" class="muted">Periodo:</label>
+        <select id="stats-range">
+          <option value="24h">Ultimas 24 horas</option>
+          <option value="7d" selected>Ultimos 7 dias</option>
+          <option value="30d">Ultimos 30 dias</option>
+          <option value="all">Historico completo</option>
+        </select>
+      </div>
+      <div class="row">
+        <label for="stats-from" class="muted">Desde:</label>
+        <input id="stats-from" type="date" />
+        <label for="stats-to" class="muted">Hasta:</label>
+        <input id="stats-to" type="date" />
+        <button id="stats-clear" class="secondary">Limpiar fechas</button>
+      </div>
+      <p class="muted">Si llenas desde/hasta, tienen prioridad sobre el periodo (igual que <span class="hl">/estadisticas</span>).</p>
+      <div id="stats-output" class="console" style="margin-top: 8px; min-height: 200px; max-height: 320px;"></div>
+    </section>
+
     <section class="console" id="log"></section>
   </main>
 
@@ -261,6 +289,11 @@
     const assignPlant = document.getElementById('assign-plant');
     const mainStatusCard = document.getElementById('main-status-card');
     const mainStatus = document.getElementById('main-status');
+    const statsCard = document.getElementById('stats-card');
+    const statsOutput = document.getElementById('stats-output');
+    const statsRange = document.getElementById('stats-range');
+    const statsFrom = document.getElementById('stats-from');
+    const statsTo = document.getElementById('stats-to');
     const plantStatus = document.getElementById('plant-status');
     const plantSeeds = document.getElementById('plant-seeds');
     const plantStart = document.getElementById('plant-start');
@@ -302,8 +335,55 @@
         runsStarts: [],
         runsFinishes: [],
         plantationStarts: [],
-        plantationFinishes: []
+        plantationFinishes: [],
+        plantationCycles: []
       };
+      seedDemoHistory();
+    }
+
+    const HOUR = 60 * 60 * 1000;
+
+    // Historial simulado para que los periodos (24h / 7d / 30d) den resultados distintos.
+    const DEMO_SEED = [
+      { list: 'mtHistory', hoursAgo: 3, user: 'user_1', type: 'maritimo', hours: 24 },
+      { list: 'mtHistory', hoursAgo: 6, user: 'user_2', type: 'terrestre', hours: 8 },
+      { list: 'mtHistory', hoursAgo: 11, user: 'user_1', type: 'terrestre', hours: 8 },
+      { list: 'mtHistory', hoursAgo: 30, user: 'user_3', type: 'maritimo', hours: 24 },
+      { list: 'mtHistory', hoursAgo: 52, user: 'user_1', type: 'maritimo', hours: 24 },
+      { list: 'mtHistory', hoursAgo: 80, user: 'user_4', type: 'terrestre', hours: 8 },
+      { list: 'mtHistory', hoursAgo: 140, user: 'user_2', type: 'terrestre', hours: 8 },
+      { list: 'mtHistory', hoursAgo: 260, user: 'user_5', type: 'maritimo', hours: 24 },
+      { list: 'mtHistory', hoursAgo: 430, user: 'user_3', type: 'terrestre', hours: 8 },
+      { list: 'mtHistory', hoursAgo: 640, user: 'user_5', type: 'terrestre', hours: 8 },
+
+      { list: 'runsStarts', hoursAgo: 2, user: 'user_3' },
+      { list: 'runsFinishes', hoursAgo: 1, user: 'user_3' },
+      { list: 'runsStarts', hoursAgo: 36, user: 'user_1' },
+      { list: 'runsFinishes', hoursAgo: 35, user: 'user_1' },
+      { list: 'runsStarts', hoursAgo: 110, user: 'user_2' },
+      { list: 'runsStarts', hoursAgo: 400, user: 'user_4' },
+      { list: 'runsFinishes', hoursAgo: 399, user: 'user_4' },
+
+      { list: 'plantationStarts', hoursAgo: 7, user: 'user_2', type: 'ramas', seeds: 40 },
+      { list: 'plantationCycles', hoursAgo: 4, user: 'user_2', type: 'ramas' },
+      { list: 'plantationStarts', hoursAgo: 60, user: 'user_5', type: 'duplicado', seeds: 15 },
+      { list: 'plantationCycles', hoursAgo: 57, user: 'user_5', type: 'duplicado' },
+      { list: 'plantationFinishes', hoursAgo: 57, user: 'user_5', type: 'duplicado', seeds: 15 },
+      { list: 'plantationStarts', hoursAgo: 250, user: 'user_1', type: 'ramas', seeds: 80 },
+      { list: 'plantationCycles', hoursAgo: 247, user: 'user_1', type: 'ramas' },
+      { list: 'plantationCycles', hoursAgo: 244, user: 'user_1', type: 'ramas' },
+      { list: 'plantationFinishes', hoursAgo: 244, user: 'user_1', type: 'ramas', seeds: 80 }
+    ];
+
+    function seedDemoHistory() {
+      const base = Date.now();
+      for (const item of DEMO_SEED) {
+        const { list, hoursAgo, ...rest } = item;
+        stats[list].push({ ...rest, at: base - hoursAgo * HOUR, demo: true });
+      }
+      for (const list of Object.values(stats)) {
+        list.sort((a, b) => a.at - b.at);
+      }
     }
 
     function renderAssignments() {
@@ -437,6 +517,110 @@
       mainStatusCard.style.display = 'block';
     }
 
+    const RANGE_PRESETS = {
+      '24h': { label: 'Ultimas 24 horas', ms: 24 * HOUR },
+      '7d': { label: 'Ultimos 7 dias', ms: 7 * 24 * HOUR },
+      '30d': { label: 'Ultimos 30 dias', ms: 30 * 24 * HOUR },
+      all: { label: 'Historico completo', ms: null }
+    };
+
+    function resolveStatsRange() {
+      const now = Date.now();
+      const fromCustom = statsFrom.value ? new Date(`${statsFrom.value}T00:00:00`).getTime() : null;
+      const toCustom = statsTo.value ? new Date(`${statsTo.value}T23:59:59`).getTime() : null;
+
+      if (fromCustom !== null || toCustom !== null) {
+        const from = fromCustom !== null ? fromCustom : 0;
+        const to = toCustom !== null ? toCustom : now;
+        if (from > to) {
+          return { error: 'El inicio del rango es posterior al final. Revisa las fechas.' };
+        }
+        return { from, to, label: 'Rango personalizado' };
+      }
+
+      const preset = RANGE_PRESETS[statsRange.value] || RANGE_PRESETS['7d'];
+      return {
+        from: preset.ms === null ? 0 : now - preset.ms,
+        to: now,
+        label: preset.label
+      };
+    }
+
+    function inRange(items, from, to) {
+      return items.filter((item) => item.at >= from && item.at <= to);
+    }
+
+    function rankUsers(items, limit = 10) {
+      const counts = new Map();
+      for (const item of items) {
+        counts.set(item.user, (counts.get(item.user) || 0) + 1);
+      }
+      const entries = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+      if (!entries.length) return ['- Sin registros en este periodo'];
+
+      const lines = entries.slice(0, limit).map(([user, count], i) => `${i + 1}. ${user} - ${count}`);
+      if (entries.length > limit) lines.push(`... y ${entries.length - limit} usuario(s) mas`);
+      return lines;
+    }
+
+    function showMainStats() {
+      const range = resolveStatsRange();
+      statsCard.style.display = 'block';
+
+      if (range.error) {
+        statsOutput.textContent = range.error;
+        return;
+      }
+
+      const { from, to, label } = range;
+      const mt = inRange(stats.mtHistory, from, to);
+      const maritimo = mt.filter((x) => x.type === 'maritimo');
+      const terrestre = mt.filter((x) => x.type === 'terrestre');
+      const runsStarts = inRange(stats.runsStarts, from, to);
+      const runsFinishes = inRange(stats.runsFinishes, from, to);
+      const plantStarts = inRange(stats.plantationStarts, from, to);
+      const plantFinishes = inRange(stats.plantationFinishes, from, to);
+      const plantCycles = inRange(stats.plantationCycles, from, to);
+
+      const fmt = (ms) => new Date(ms).toLocaleString();
+      const lines = [];
+      lines.push(`## Estadisticas generales - ${label}`);
+      lines.push(`Desde ${from > 0 ? fmt(from) : 'el inicio'} hasta ${fmt(to)}`);
+      lines.push('');
+
+      lines.push(`### Maritimo (${maritimo.length} misiones)`);
+      lines.push(`Usuarios distintos: ${new Set(maritimo.map((x) => x.user)).size}`);
+      lines.push(...rankUsers(maritimo));
+      lines.push('');
+
+      lines.push(`### Terrestre (${terrestre.length} misiones)`);
+      lines.push(`Usuarios distintos: ${new Set(terrestre.map((x) => x.user)).size}`);
+      lines.push(...rankUsers(terrestre));
+      lines.push('');
+
+      lines.push(`### RUNS (${runsStarts.length} iniciadas / ${runsFinishes.length} finalizadas)`);
+      lines.push(`Usuarios distintos: ${new Set(runsStarts.map((x) => x.user)).size}`);
+      lines.push(...rankUsers(runsStarts));
+      lines.push('');
+
+      const seeds = plantStarts.reduce((acc, x) => acc + (Number(x.seeds) || 0), 0);
+      lines.push(`### Plantacion (${plantStarts.length} iniciadas / ${plantFinishes.length} finalizadas)`);
+      lines.push(`Ciclos marcados: ${plantCycles.length} | Semillas usadas: ${seeds}`);
+      lines.push(`Usuarios distintos: ${new Set(plantStarts.map((x) => x.user)).size}`);
+      lines.push(...rankUsers(plantStarts));
+
+      if (!mt.length && !runsStarts.length && !plantStarts.length) {
+        lines.push('');
+        lines.push('No hay actividad registrada en este periodo.');
+      }
+
+      statsOutput.textContent = lines.join('\n');
+    }
+
+    function refreshStatsIfVisible() {
+      if (statsCard.style.display === 'block') showMainStats();
+    }
+
     function recreatePlantPanel() {
       write(`${channelAssignments.plantacion}: panel de Plantacion recreado.`);
       write(`${channelAssignments.plantacion}: botones disponibles -> Ramas | Duplicado`);
@@ -449,6 +633,7 @@
       renderMt();
       renderRuns();
       renderPlant();
+      refreshStatsIfVisible();
       write('Main: recreacion total ejecutada (paneles y estado demo reiniciados).');
       recreatePlantPanel();
     }
@@ -481,6 +666,7 @@
       mtEvidence.disabled = true;
       mtState.selected = null;
       renderMt();
+      refreshStatsIfVisible();
     });
 
     runsStart.addEventListener('click', () => {
@@ -490,6 +676,7 @@
       write('RUNS iniciada.');
       write(`${channelAssignments.runs}: ${simulatedUser} inicio una RUNS.`);
       renderRuns();
+      refreshStatsIfVisible();
     });
 
     runsFinish.addEventListener('click', () => {
@@ -500,6 +687,7 @@
       write('RUNS terminada. CD iniciado (demo 40s).');
       write(`${channelAssignments.runs}: ${simulatedUser} finalizo una RUNS.`);
       renderRuns();
+      refreshStatsIfVisible();
     });
 
     document.getElementById('plant-ramas').addEventListener('click', () => {
@@ -533,6 +721,7 @@
       write(`${channelAssignments.plantacion}: ${plant.user} inicio ${plant.selectedType} con ${seeds} semillas.`);
       write(`${channelAssignments.plantacion}: ciclo 1/${plant.totalCycles} en progreso (demo 25s).`);
       renderPlant();
+      refreshStatsIfVisible();
     });
 
     plantCycle.addEventListener('click', () => {
@@ -540,6 +729,7 @@
       if (Date.now() < plant.nextCycleAt) return;
 
       plant.completedCycles += 1;
+      stats.plantationCycles.push({ user: plant.user, type: plant.selectedType, at: Date.now() });
       write(`${channelAssignments.plantacion}: ${plant.user} marco ciclo ${plant.completedCycles}/${plant.totalCycles}.`);
 
       if (plant.completedCycles >= plant.totalCycles) {
@@ -566,6 +756,7 @@
       }
 
       renderPlant();
+      refreshStatsIfVisible();
     });
 
     plantAdd4.addEventListener('click', () => {
@@ -592,6 +783,7 @@
       plant.nextCycleAt = null;
       plantSeeds.value = '';
       renderPlant();
+      refreshStatsIfVisible();
     });
 
     assignMt.addEventListener('change', () => {
@@ -615,6 +807,28 @@
     document.getElementById('main-estado').addEventListener('click', () => {
       showMainEstado();
       write('Boton Main > Ver estado ejecutado.');
+    });
+
+    document.getElementById('main-stats').addEventListener('click', () => {
+      showMainStats();
+      write('Boton Main > Estadisticas ejecutado.');
+    });
+
+    statsRange.addEventListener('change', () => {
+      statsFrom.value = '';
+      statsTo.value = '';
+      showMainStats();
+      write(`Estadisticas: periodo cambiado a ${RANGE_PRESETS[statsRange.value].label}.`);
+    });
+
+    statsFrom.addEventListener('change', showMainStats);
+    statsTo.addEventListener('change', showMainStats);
+
+    document.getElementById('stats-clear').addEventListener('click', () => {
+      statsFrom.value = '';
+      statsTo.value = '';
+      showMainStats();
+      write('Estadisticas: fechas personalizadas limpiadas.');
     });
 
     document.getElementById('main-canales').addEventListener('click', () => {

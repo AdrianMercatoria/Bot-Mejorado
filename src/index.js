@@ -12,7 +12,8 @@ const {
   Partials,
   REST,
   Routes,
-  SlashCommandBuilder
+  SlashCommandBuilder,
+  StringSelectMenuBuilder
 } = require('discord.js');
 const { readState, writeState } = require('./storage');
 const { addHours, formatDuration } = require('./time');
@@ -79,6 +80,30 @@ const commands = [
         .setDescription('Canal de respuesta para la tarea')
         .addChannelTypes(ChannelType.GuildText)
         .setRequired(true)
+    ),
+  new SlashCommandBuilder()
+    .setName('estadisticas')
+    .setDescription('Estadisticas generales de cada mision en un rango de tiempo')
+    .addStringOption((opt) =>
+      opt
+        .setName('rango')
+        .setDescription('Periodo rapido (se ignora si usas desde/hasta)')
+        .addChoices(
+          { name: 'Ultimas 24 horas', value: '24h' },
+          { name: 'Ultimos 7 dias', value: '7d' },
+          { name: 'Ultimos 30 dias', value: '30d' },
+          { name: 'Historico completo', value: 'all' }
+        )
+    )
+    .addStringOption((opt) =>
+      opt
+        .setName('desde')
+        .setDescription('Fecha inicio: YYYY-MM-DD o YYYY-MM-DD HH:MM (tambien DD/MM/YYYY)')
+    )
+    .addStringOption((opt) =>
+      opt
+        .setName('hasta')
+        .setDescription('Fecha fin: YYYY-MM-DD o YYYY-MM-DD HH:MM (tambien DD/MM/YYYY)')
     ),
   new SlashCommandBuilder()
     .setName('config_cd')
@@ -339,7 +364,11 @@ function buildAdminPanelButtons(guildConfig) {
       new ButtonBuilder()
         .setCustomId('main:list-evidence')
         .setLabel('Evidencias pendientes')
-        .setStyle(ButtonStyle.Secondary)
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('main:stats')
+        .setLabel('📊 Estadisticas')
+        .setStyle(ButtonStyle.Primary)
     ),
     new ActionRowBuilder().addComponents(
       new ButtonBuilder()
@@ -1254,6 +1283,170 @@ function cleanExpiredPendingEvidence(state) {
   }
 }
 
+const RANGE_PRESETS = {
+  '24h': { label: 'Ultimas 24 horas', ms: 24 * 60 * 60 * 1000 },
+  '7d': { label: 'Ultimos 7 dias', ms: 7 * 24 * 60 * 60 * 1000 },
+  '30d': { label: 'Ultimos 30 dias', ms: 30 * 24 * 60 * 60 * 1000 },
+  all: { label: 'Historico completo', ms: null }
+};
+
+function buildStatsRangeMenu() {
+  return [
+    new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId('stats:range')
+        .setPlaceholder('Elige el periodo a consultar')
+        .addOptions(
+          Object.entries(RANGE_PRESETS).map(([value, preset]) => ({
+            label: preset.label,
+            value
+          }))
+        )
+    )
+  ];
+}
+
+function parseDateInput(raw, endOfDay = false) {
+  if (!raw) return null;
+  const value = String(raw).trim();
+
+  let match = /^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T](\d{1,2}):(\d{2}))?$/.exec(value);
+  if (!match) {
+    const alt = /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ T](\d{1,2}):(\d{2}))?$/.exec(value);
+    if (alt) match = [alt[0], alt[3], alt[2], alt[1], alt[4], alt[5]];
+  }
+  if (!match) return null;
+
+  const [, year, month, day, hour, minute] = match;
+  const hasTime = hour !== undefined;
+  const date = new Date(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+    hasTime ? Number(hour) : endOfDay ? 23 : 0,
+    hasTime ? Number(minute) : endOfDay ? 59 : 0,
+    hasTime ? 0 : endOfDay ? 59 : 0,
+    hasTime ? 0 : endOfDay ? 999 : 0
+  );
+
+  if (Number.isNaN(date.getTime())) return null;
+  return date.getTime();
+}
+
+function resolveStatsRange({ rangeKey, desde, hasta }) {
+  const now = Date.now();
+  const fromCustom = parseDateInput(desde, false);
+  const toCustom = parseDateInput(hasta, true);
+
+  if (desde && fromCustom === null) {
+    return { error: `No pude leer la fecha "desde": \`${desde}\`. Usa YYYY-MM-DD o YYYY-MM-DD HH:MM.` };
+  }
+  if (hasta && toCustom === null) {
+    return { error: `No pude leer la fecha "hasta": \`${hasta}\`. Usa YYYY-MM-DD o YYYY-MM-DD HH:MM.` };
+  }
+
+  if (fromCustom !== null || toCustom !== null) {
+    const from = fromCustom !== null ? fromCustom : 0;
+    const to = toCustom !== null ? toCustom : now;
+    if (from > to) {
+      return { error: 'El inicio del rango es posterior al final. Revisa las fechas.' };
+    }
+    return { from, to, label: 'Rango personalizado' };
+  }
+
+  const preset = RANGE_PRESETS[rangeKey] || RANGE_PRESETS['7d'];
+  return {
+    from: preset.ms === null ? 0 : now - preset.ms,
+    to: now,
+    label: preset.label
+  };
+}
+
+function countByUser(items) {
+  const counts = new Map();
+  for (const item of items) {
+    counts.set(item.userId, (counts.get(item.userId) || 0) + 1);
+  }
+  return counts;
+}
+
+function formatUserRanking(counts, limit = 10) {
+  const entries = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  if (!entries.length) return ['- Sin registros en este periodo'];
+
+  const lines = entries
+    .slice(0, limit)
+    .map(([userId, count], index) => `${index + 1}. <@${userId}> - ${count}`);
+
+  if (entries.length > limit) {
+    lines.push(`... y ${entries.length - limit} usuario(s) mas`);
+  }
+  return lines;
+}
+
+function formatRangeHeader(from, to) {
+  const desde = from > 0 ? `<t:${Math.floor(from / 1000)}:f>` : 'el inicio';
+  return `Desde ${desde} hasta <t:${Math.floor(to / 1000)}:f>`;
+}
+
+function truncateForDiscord(text, limit = 1950) {
+  if (text.length <= limit) return text;
+  return `${text.slice(0, limit - 40)}\n... (recortado por limite de Discord)`;
+}
+
+function buildStatsText(state, guildId, { from, to, label }) {
+  const reports = state.reports.filter(
+    (r) => r.guildId === guildId && r.createdAt >= from && r.createdAt <= to
+  );
+
+  const mtReports = reports.filter((r) => r.kind === 'maritime_terrestrial');
+  const maritime = mtReports.filter((r) => r.type === 'maritimo');
+  const terrestrial = mtReports.filter((r) => r.type === 'terrestre');
+  const runsStarts = reports.filter((r) => r.kind === 'runs_start');
+  const runsFinishes = reports.filter((r) => r.kind === 'runs_finish');
+  const runsAutoClosed = reports.filter((r) => r.kind === 'runs_auto_close');
+  const plantStarts = reports.filter((r) => r.kind === 'plantation_start');
+  const plantFinishes = reports.filter((r) => r.kind === 'plantation_finish');
+  const plantCycles = reports.filter((r) => r.kind === 'plantation_cycle');
+
+  const lines = [];
+  lines.push(`## Estadisticas generales - ${label}`);
+  lines.push(formatRangeHeader(from, to));
+  lines.push('');
+
+  lines.push(`### Maritimo (${maritime.length} misiones)`);
+  lines.push(`Usuarios distintos: ${new Set(maritime.map((r) => r.userId)).size}`);
+  lines.push(...formatUserRanking(countByUser(maritime)));
+  lines.push('');
+
+  lines.push(`### Terrestre (${terrestrial.length} misiones)`);
+  lines.push(`Usuarios distintos: ${new Set(terrestrial.map((r) => r.userId)).size}`);
+  lines.push(...formatUserRanking(countByUser(terrestrial)));
+  lines.push('');
+
+  lines.push(`### RUNS (${runsStarts.length} iniciadas / ${runsFinishes.length} finalizadas)`);
+  if (runsAutoClosed.length) {
+    lines.push(`Cerradas automaticamente por inactividad: ${runsAutoClosed.length}`);
+  }
+  lines.push(`Usuarios distintos: ${new Set(runsStarts.map((r) => r.userId)).size}`);
+  lines.push(...formatUserRanking(countByUser(runsStarts)));
+  lines.push('');
+
+  const seeds = plantStarts.reduce((acc, r) => acc + (Number(r.seeds) || 0), 0);
+  lines.push(`### Plantacion (${plantStarts.length} iniciadas / ${plantFinishes.length} finalizadas)`);
+  lines.push(`Ciclos marcados: ${plantCycles.length} | Semillas usadas: ${seeds}`);
+  lines.push(`Usuarios distintos: ${new Set(plantStarts.map((r) => r.userId)).size}`);
+  lines.push(...formatUserRanking(countByUser(plantStarts)));
+
+  const totalActivity = mtReports.length + runsStarts.length + plantStarts.length;
+  if (!totalActivity) {
+    lines.push('');
+    lines.push('No hay actividad registrada en este periodo.');
+  }
+
+  return truncateForDiscord(lines.join('\n'));
+}
+
 function buildEstadoText(state, guildId, guildConfig, guildTasks) {
   const lines = [];
   const now = Date.now();
@@ -1693,6 +1886,25 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
+    if (interaction.commandName === 'estadisticas') {
+      const range = resolveStatsRange({
+        rangeKey: interaction.options.getString('rango') || '7d',
+        desde: interaction.options.getString('desde'),
+        hasta: interaction.options.getString('hasta')
+      });
+
+      if (range.error) {
+        await interaction.reply({ content: range.error, ephemeral: true });
+        return;
+      }
+
+      await interaction.reply({
+        content: buildStatsText(state, interaction.guildId, range),
+        ephemeral: true
+      });
+      return;
+    }
+
     if (interaction.commandName === 'config_cd') {
       if (!isAdmin(interaction)) {
         await interaction.reply({
@@ -1733,6 +1945,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
   }
 
+  if (interaction.isStringSelectMenu() && interaction.customId === 'stats:range') {
+    const range = resolveStatsRange({ rangeKey: interaction.values[0] });
+    await interaction.update({
+      content: buildStatsText(state, interaction.guildId, range),
+      components: buildStatsRangeMenu()
+    });
+    return;
+  }
+
   if (!interaction.isButton()) return;
 
   try {
@@ -1762,6 +1983,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const tasks = ensureTaskContainer(state, interaction.guildId);
       await interaction.reply({
         content: buildEstadoText(state, interaction.guildId, guildConfig, tasks),
+        ephemeral: true
+      });
+      return;
+    }
+
+    if (interaction.customId === 'main:stats') {
+      const range = resolveStatsRange({ rangeKey: '7d' });
+      await interaction.reply({
+        content: buildStatsText(state, interaction.guildId, range),
+        components: buildStatsRangeMenu(),
         ephemeral: true
       });
       return;
