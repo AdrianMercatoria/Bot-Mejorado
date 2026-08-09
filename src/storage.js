@@ -7,6 +7,10 @@ const DATA_DIR = process.env.DATA_DIR
   ? path.resolve(process.env.DATA_DIR)
   : path.join(process.cwd(), 'data');
 
+// Ubicacion por defecto, dentro del proyecto. Sirve para migrar solo.
+const LEGACY_DATA_DIR = path.join(process.cwd(), 'data');
+const USING_CUSTOM_DIR = path.resolve(DATA_DIR) !== path.resolve(LEGACY_DATA_DIR);
+
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
 const BACKUP_FILE = path.join(DATA_DIR, 'state.backup.json');
 const TMP_FILE = path.join(DATA_DIR, 'state.tmp.json');
@@ -166,7 +170,37 @@ function readState() {
     return backup;
   }
 
+  // Migracion: si acaban de configurar DATA_DIR y la carpeta nueva esta
+  // vacia, adoptamos los datos que vivian dentro del proyecto. Sin esto, el
+  // bot arrancaria en blanco y se perderian paneles, cooldowns y historial.
+  const migrated = adoptLegacyState();
+  if (migrated) return migrated;
+
   return createDefaultState();
+}
+
+function adoptLegacyState() {
+  if (!USING_CUSTOM_DIR) return null;
+
+  const legacyFile = path.join(LEGACY_DATA_DIR, 'state.json');
+  let legacy = null;
+  try {
+    legacy = readCandidate(legacyFile);
+  } catch (error) {
+    console.error(`[DATOS] Habia datos antiguos en ${legacyFile} pero no se pudieron leer: ${error.message}`);
+    return null;
+  }
+  if (!legacy) return null;
+
+  const guilds = Object.keys(legacy.guilds || {}).length;
+  const reports = (legacy.reports || []).length;
+  if (!guilds && !reports) return null; // estaba vacio: nada que migrar
+
+  console.warn(
+    `[DATOS] DATA_DIR es nuevo y esta vacio. Se adoptan los datos previos de ${legacyFile} ` +
+    `(${describeState(legacy)}). El archivo antiguo se conserva intacto.`
+  );
+  return legacy;
 }
 
 let lastBackupAt = 0;
