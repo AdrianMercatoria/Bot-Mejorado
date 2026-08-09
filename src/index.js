@@ -2010,6 +2010,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       await interaction.reply({
         content: buildStatsText(state, interaction.guildId, range),
+        components: buildStatsComponents(range),
         ephemeral: true
       });
       return;
@@ -2375,11 +2376,18 @@ client.once(Events.ClientReady, async (readyClient) => {
   console.log(`[OK] Bot conectado como ${readyClient.user.tag} (${readyClient.user.id})`);
 
   const storageInfo = getStorageInfo();
-  const currentState = readState();
+  let loaded = '(no se pudo leer)';
+  try {
+    const currentState = readState();
+    loaded =
+      `${Object.keys(currentState.guilds || {}).length} servidor(es), ` +
+      `${(currentState.reports || []).length} reporte(s)`;
+  } catch (error) {
+    console.error(`[DATOS] Error leyendo la base de datos al arrancar: ${error.message}`);
+  }
   console.log(
     `[DATOS] Base de datos en: ${storageInfo.stateFile}\n` +
-    `        Contenido actual: ${Object.keys(currentState.guilds || {}).length} servidor(es), ` +
-    `${(currentState.reports || []).length} reporte(s)\n` +
+    `        Contenido actual: ${loaded}\n` +
     `        Respaldo automatico: ${storageInfo.backupFile}` +
     (process.env.DATA_DIR
       ? ''
