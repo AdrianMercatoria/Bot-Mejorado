@@ -136,12 +136,26 @@ function collectCandidates(pieces) {
     while ((match = bare.exec(normalized)) !== null) {
       const value = toNumber(match[0], null);
       if (value !== null && value > 0) {
-        plain.push({ value, raw: match[0], confidence: piece.confidence });
+        plain.push({
+          value,
+          raw: match[0],
+          confidence: piece.confidence,
+          complete: isCompleteNumber(match[0], value)
+        });
       }
     }
   }
 
   return { suffixed, plain };
+}
+
+// Una cifra sin sufijo puede ser completa ("802,164") o el principio de una
+// abreviada a la que el OCR se comio la K ("440" por "440K"). La distinguimos
+// por la forma: agrupacion de miles o magnitud suficiente = completa.
+function isCompleteNumber(raw, value) {
+  if (/^\d{1,3}([.,]\d{3})+$/.test(raw)) return true; // 802,164 / 1.234.567
+  if (/^\d+$/.test(raw) && value >= 1000) return true; // 802164
+  return false;
 }
 
 /**
@@ -183,6 +197,20 @@ function parseAmount(rawText, words = []) {
     return { amount: null, needsReview: true, reason: 'No se encontro ninguna cifra en la imagen.' };
   }
 
+  // Preferimos una cifra completa aunque otra suelta sea mayor: "2 802,164"
+  // debe dar 802.164, no quedarse con un fragmento.
+  const complete = plain.filter((p) => p.complete);
+  if (complete.length) {
+    const best = complete.reduce((a, b) => (b.value > a.value ? b : a));
+    return {
+      amount: best.value,
+      needsReview: false,
+      raw: best.raw,
+      hadSuffix: false,
+      tokenConfidence: best.confidence
+    };
+  }
+
   const best = plain.reduce((a, b) => (b.value > a.value ? b : a));
   return {
     amount: best.value,
@@ -190,7 +218,7 @@ function parseAmount(rawText, words = []) {
     raw: best.raw,
     hadSuffix: false,
     tokenConfidence: best.confidence,
-    reason: 'La cifra no traia sufijo (K/M). Puede faltarle un multiplicador.'
+    reason: 'La cifra no traia sufijo (K/M) ni separador de miles. Puede faltarle un multiplicador.'
   };
 }
 

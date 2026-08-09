@@ -155,6 +155,14 @@ El bot **no suma** una lectura y la marca con ⚠️ cuando:
 
 Esas lecturas quedan registradas y se muestran aparte en las estadisticas, pero no suman al total.
 
+### Probarlo en la verificacion visual
+```
+npm run preview
+```
+Abre la direccion que muestre (por defecto `http://localhost:4321`). La tarjeta **Conteo de dinero** deja arrastrar capturas reales y las procesa con el mismo OCR del bot: veras la cifra detectada, la confianza, el tiempo y el mensaje exacto que publicaria en el canal de reporte. Lo leido tambien alimenta la tarjeta de `Estadisticas`.
+
+Si abres `preview/panel-preview.html` directamente (sin el servidor), el resto de la demo funciona pero el OCR no: la tarjeta lo avisa.
+
 ### Calibrar con tus capturas
 El acierto depende de como se vean tus imagenes. Antes de confiar en el conteo, pasa unas cuantas capturas reales por:
 
