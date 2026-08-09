@@ -146,6 +146,62 @@
 
     .hl { font-weight: 700; }
 
+    .dropzone {
+      border: 2px dashed var(--line);
+      border-radius: 12px;
+      padding: 18px;
+      text-align: center;
+      color: var(--muted);
+      background: #fafafa;
+      cursor: pointer;
+      transition: border-color .15s, background .15s;
+    }
+
+    .dropzone.over {
+      border-color: var(--accent);
+      background: #ecfeff;
+      color: var(--ink);
+    }
+
+    .shots {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .shot {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 6px;
+      width: 116px;
+      background: #fff;
+      font-size: 11px;
+      text-align: center;
+    }
+
+    .shot img {
+      width: 100%;
+      height: 84px;
+      object-fit: contain;
+      background: #111;
+      border-radius: 6px;
+    }
+
+    .shot .amount { font-weight: 700; margin-top: 4px; }
+    .shot.ok .amount { color: var(--primary); }
+    .shot.review .amount { color: var(--warn); }
+    .shot.bad .amount { color: var(--danger); }
+
+    .offline-note {
+      background: #fffbeb;
+      border: 1px solid #fcd34d;
+      border-radius: 10px;
+      padding: 10px;
+      font-size: .9rem;
+      margin-top: 8px;
+    }
+
     @media (max-width: 640px) {
       .wrap { padding: 14px; }
       .card { padding: 12px; }
@@ -235,6 +291,35 @@
       </article>
     </section>
 
+    <section class="card" style="margin-top: 16px;" id="money-card">
+      <h2>Conteo de dinero (OCR real)</h2>
+      <p class="muted">
+        Suelta aqui capturas del inventario. Se procesan con <span class="hl">el mismo OCR que usa el bot</span>,
+        asi que lo que veas es exactamente lo que publicaria en el canal de reporte.
+      </p>
+      <div id="money-offline" class="offline-note" style="display: none;">
+        Estas abriendo el archivo directamente, asi que el OCR no esta disponible.
+        Para probarlo de verdad, arranca <span class="hl">npm run preview</span> y abre la direccion que muestre.
+      </div>
+      <div class="dropzone" id="money-drop">
+        Arrastra imagenes aqui, o haz clic para elegirlas
+        <input id="money-file" type="file" accept="image/*" multiple hidden />
+      </div>
+      <div class="row">
+        <label for="money-user" class="muted">Simular como usuario:</label>
+        <select id="money-user">
+          <option value="user_1">user_1</option>
+          <option value="user_2">user_2</option>
+          <option value="user_3">user_3</option>
+        </select>
+        <button id="money-clear" class="secondary">Limpiar resultados</button>
+      </div>
+      <p id="money-status" class="status">Sin imagenes procesadas</p>
+      <div class="shots" id="money-shots"></div>
+      <p class="muted">Mensaje que publicaria el bot en el canal de reporte:</p>
+      <div id="money-output" class="console" style="min-height: 90px; max-height: 220px;"></div>
+    </section>
+
     <section class="card" style="margin-top: 16px; display: none;" id="main-status-card">
       <h2>Resumen Main</h2>
       <p class="muted">Muestra quien hizo maritimo/terrestre y cuantos iniciaron RUNS.</p>
@@ -306,6 +391,13 @@
     const statsRange = document.getElementById('stats-range');
     const statsFrom = document.getElementById('stats-from');
     const statsTo = document.getElementById('stats-to');
+    const moneyDrop = document.getElementById('money-drop');
+    const moneyFile = document.getElementById('money-file');
+    const moneyShots = document.getElementById('money-shots');
+    const moneyOutput = document.getElementById('money-output');
+    const moneyStatus = document.getElementById('money-status');
+    const moneyUser = document.getElementById('money-user');
+    const moneyOffline = document.getElementById('money-offline');
     const statsMission = document.getElementById('stats-mission');
     const statsPrev = document.getElementById('stats-prev');
     const statsNext = document.getElementById('stats-next');
@@ -351,7 +443,8 @@
         runsFinishes: [],
         plantationStarts: [],
         plantationFinishes: [],
-        plantationCycles: []
+        plantationCycles: [],
+        moneyDeliveries: []
       };
       seedDemoHistory();
     }
@@ -698,6 +791,24 @@
       lines.push(`Usuarios distintos: ${new Set(plantStarts.map((x) => x.user)).size}`);
       lines.push(...rankUsers(plantStarts));
 
+      const moneyAll = inRange(stats.moneyDeliveries, from, to);
+      if (moneyAll.length) {
+        const moneyOk = moneyAll.filter((x) => !x.needsReview);
+        const totalMoney = moneyOk.reduce((acc, x) => acc + (Number(x.amount) || 0), 0);
+        const byUser = new Map();
+        moneyOk.forEach((x) => byUser.set(x.user, (byUser.get(x.user) || 0) + x.amount));
+
+        lines.push('');
+        lines.push(`### Dinero enviado (${formatMoney(totalMoney)})`);
+        lines.push(`Entregas contabilizadas: ${moneyOk.length} de ${moneyAll.length}`);
+        const dudosas = moneyAll.length - moneyOk.length;
+        if (dudosas) lines.push(`⚠️ ${dudosas} lectura(s) dudosa(s), no sumadas.`);
+        lines.push(`Usuarios distintos: ${byUser.size}`);
+        const ordenados = [...byUser.entries()].sort((a, b) => b[1] - a[1]);
+        if (!ordenados.length) lines.push('- Sin registros en este periodo');
+        ordenados.forEach(([user, amount], i) => lines.push(`${i + 1}. ${user} - ${formatMoney(amount)}`));
+      }
+
       if (!mt.length && !runsStarts.length && !plantStarts.length) {
         lines.push('');
         lines.push('No hay actividad registrada en este periodo.');
@@ -708,6 +819,134 @@
 
     function refreshStatsIfVisible() {
       if (statsCard.style.display === 'block') showMainStats();
+    }
+
+    const formatMoney = (v) => v.toLocaleString('es-ES');
+
+    function renderMoneyOutput() {
+      const mine = stats.moneyDeliveries;
+      if (!mine.length) {
+        moneyOutput.textContent = '(todavia no se ha procesado ninguna imagen)';
+        moneyStatus.className = 'status';
+        moneyStatus.textContent = 'Sin imagenes procesadas';
+        return;
+      }
+
+      const counted = mine.filter((m) => !m.needsReview);
+      const total = counted.reduce((acc, m) => acc + m.amount, 0);
+
+      const byUser = new Map();
+      counted.forEach((m) => byUser.set(m.user, (byUser.get(m.user) || 0) + m.amount));
+
+      const lines = [];
+      lines.push(`#control-dinero  (lo que publicaria el bot)`);
+      lines.push('');
+      for (const [user, amount] of [...byUser.entries()].sort((a, b) => b[1] - a[1])) {
+        lines.push(`💵 ${user} envio ${formatMoney(amount)}`);
+      }
+      const dudosas = mine.filter((m) => m.needsReview);
+      if (dudosas.length) {
+        lines.push('');
+        dudosas.forEach((m) => {
+          lines.push(`⚠️ ${m.user}: ${m.amount === null ? 'sin cifra' : formatMoney(m.amount)} — ${m.reason}`);
+        });
+        lines.push('(las dudosas no suman al total)');
+      }
+      lines.push('');
+      lines.push(`Total contabilizado: ${formatMoney(total)} en ${counted.length} de ${mine.length} imagen(es)`);
+
+      moneyOutput.textContent = lines.join('\n');
+      moneyStatus.className = counted.length ? 'status ok' : 'status warn';
+      moneyStatus.textContent = `${counted.length} contabilizada(s), ${dudosas.length} a revisar`;
+    }
+
+    function addShot(dataUrl, name, result) {
+      const box = document.createElement('div');
+      const state = result.error || result.amount === null ? 'bad' : result.needsReview ? 'review' : 'ok';
+      box.className = `shot ${state}`;
+
+      const img = document.createElement('img');
+      img.src = dataUrl;
+      img.alt = name;
+      box.appendChild(img);
+
+      const amount = document.createElement('div');
+      amount.className = 'amount';
+      amount.textContent = result.error
+        ? 'error'
+        : result.amount === null
+          ? 'sin cifra'
+          : result.formatted;
+      box.appendChild(amount);
+
+      const detail = document.createElement('div');
+      detail.className = 'muted';
+      detail.style.fontSize = '10px';
+      detail.textContent = result.error
+        ? result.error
+        : result.amount === null
+          ? (result.reason || '')
+          : `conf ${result.confidence}% · ${result.ms} ms`;
+      box.appendChild(detail);
+
+      box.title = result.text ? `OCR leyo: ${result.text}` : name;
+      moneyShots.appendChild(box);
+    }
+
+    function readAsDataUrl(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(new Error('No se pudo leer el archivo'));
+        reader.readAsDataURL(file);
+      });
+    }
+
+    async function processMoneyFiles(files) {
+      const images = [...files].filter((f) => f.type.startsWith('image/'));
+      if (!images.length) return;
+
+      const user = moneyUser.value;
+      moneyStatus.className = 'status run';
+      moneyStatus.textContent = `Procesando ${images.length} imagen(es)...`;
+
+      for (const file of images) {
+        const dataUrl = await readAsDataUrl(file);
+        let result;
+        try {
+          const response = await fetch('/api/ocr', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ dataUrl })
+          });
+          result = await response.json();
+          if (!response.ok) result = { error: result.error || `HTTP ${response.status}` };
+        } catch (error) {
+          result = { error: 'Sin servidor de OCR — arranca "npm run preview".' };
+          moneyOffline.style.display = 'block';
+        }
+
+        addShot(dataUrl, file.name, result);
+
+        if (!result.error) {
+          stats.moneyDeliveries.push({
+            user,
+            amount: result.amount,
+            needsReview: Boolean(result.needsReview) || result.amount === null,
+            reason: result.reason || '',
+            at: Date.now()
+          });
+          write(
+            `#control-dinero: ${user} -> ${result.amount === null ? 'sin cifra' : formatMoney(result.amount)}` +
+            `${result.needsReview ? ' (a revisar)' : ''} [${file.name}]`
+          );
+        } else {
+          write(`OCR fallo con ${file.name}: ${result.error}`);
+        }
+      }
+
+      renderMoneyOutput();
+      refreshStatsIfVisible();
     }
 
     function recreatePlantPanel() {
@@ -896,6 +1135,35 @@
     document.getElementById('main-estado').addEventListener('click', () => {
       showMainEstado();
       write('Boton Main > Ver estado ejecutado.');
+    });
+
+    moneyDrop.addEventListener('click', () => moneyFile.click());
+    moneyFile.addEventListener('change', () => {
+      processMoneyFiles(moneyFile.files);
+      moneyFile.value = '';
+    });
+    ['dragenter', 'dragover'].forEach((evt) =>
+      moneyDrop.addEventListener(evt, (e) => {
+        e.preventDefault();
+        moneyDrop.classList.add('over');
+      })
+    );
+    ['dragleave', 'drop'].forEach((evt) =>
+      moneyDrop.addEventListener(evt, (e) => {
+        e.preventDefault();
+        moneyDrop.classList.remove('over');
+      })
+    );
+    moneyDrop.addEventListener('drop', (e) => {
+      if (e.dataTransfer?.files?.length) processMoneyFiles(e.dataTransfer.files);
+    });
+
+    document.getElementById('money-clear').addEventListener('click', () => {
+      stats.moneyDeliveries = [];
+      moneyShots.textContent = '';
+      renderMoneyOutput();
+      refreshStatsIfVisible();
+      write('Conteo de dinero: resultados limpiados.');
     });
 
     document.getElementById('main-stats').addEventListener('click', () => {
