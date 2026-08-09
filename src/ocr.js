@@ -43,8 +43,33 @@ async function terminateWorker() {
   if (worker) await worker.terminate().catch(() => null);
 }
 
-async function preprocess(buffer) {
+// Umbral de saturacion por encima del cual un pixel se considera "de color".
+const COLOR_SATURATION = 0.35;
+
+// Las etiquetas de rareza del juego van en verde saturado y se superponen a la
+// cifra, que es blanca. Apagar los pixeles de color deja el numero limpio;
+// en gris, ese verde quedaba a media luz y se pegaba a los digitos.
+function suppressColoredPixels(image) {
+  const data = image.bitmap.data;
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+    const max = Math.max(r, g, b);
+    if (max === 0) continue;
+    const saturation = (max - Math.min(r, g, b)) / max;
+    if (saturation > COLOR_SATURATION) {
+      data[i] = 0;
+      data[i + 1] = 0;
+      data[i + 2] = 0;
+    }
+  }
+}
+
+async function preprocess(buffer, { removeColor = true } = {}) {
   const image = await Jimp.read(buffer);
+
+  if (removeColor) suppressColoredPixels(image);
 
   if (image.bitmap.width < TARGET_WIDTH) {
     const scale = TARGET_WIDTH / image.bitmap.width;
@@ -253,8 +278,8 @@ function enqueue(task) {
   return result;
 }
 
-async function runRecognition(buffer) {
-  const processed = await preprocess(buffer);
+async function runRecognition(buffer, options = {}) {
+  const processed = await preprocess(buffer, options);
   const worker = await getWorker();
   const { data } = await worker.recognize(processed, {}, { blocks: true, text: true });
 
@@ -276,8 +301,8 @@ async function runRecognition(buffer) {
   return result;
 }
 
-function readAmountFromBuffer(buffer) {
-  return enqueue(() => runRecognition(buffer));
+function readAmountFromBuffer(buffer, options = {}) {
+  return enqueue(() => runRecognition(buffer, options));
 }
 
 async function readAmountFromUrl(url) {

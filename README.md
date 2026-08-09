@@ -143,7 +143,9 @@ Puedes indicar solo uno de los dos y completar el otro despues. Si falta el de r
 3. Publica en el canal de reporte: quien la envio, la cantidad y el enlace al mensaje original.
 4. Marca el mensaje con ✅ si la conto, o ⚠️ si no pudo.
 
-Lee sufijos: `440K` = 440.000, `1.2M` = 1.200.000. **La cifra con sufijo es el total**; el numero pequeño del stack no se multiplica.
+Lee sufijos: `440K` = 440.000, `1.2M` = 1.200.000. **La cifra con sufijo es el total**; el numero pequeño del stack no se multiplica. Tambien lee cifras completas sin sufijo (`802,164`).
+
+Antes de leer, el bot **apaga los pixeles de color saturado** de la imagen. Las etiquetas de rareza del juego van en verde y se superponen a la cifra: en escala de grises se pegaban a los digitos y estropeaban la lectura. Con capturas de prueba superponiendo la etiqueta, el acierto limpio paso de 0 de 4 a 4 de 4, y la confianza media del 0% al 85%.
 
 Las cantidades entran en `/estadisticas` como **Dinero enviado**, con total del periodo y ranking por usuario (suma de importes, no numero de entregas).
 
