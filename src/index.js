@@ -17,6 +17,7 @@ const {
 } = require('discord.js');
 const { readState, writeState, getStorageInfo } = require('./storage');
 const { addHours, formatDuration } = require('./time');
+const { readAmountFromUrl, formatAmount } = require('./ocr');
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
@@ -80,6 +81,21 @@ const commands = [
         .setDescription('Canal de respuesta para la tarea')
         .addChannelTypes(ChannelType.GuildText)
         .setRequired(true)
+    ),
+  new SlashCommandBuilder()
+    .setName('config_dinero')
+    .setDescription('Configura el conteo automatico de dinero por fotos (solo administradores)')
+    .addChannelOption((opt) =>
+      opt
+        .setName('lectura')
+        .setDescription('Canal donde los usuarios publican las fotos del dinero')
+        .addChannelTypes(ChannelType.GuildText)
+    )
+    .addChannelOption((opt) =>
+      opt
+        .setName('reporte')
+        .setDescription('Canal donde el bot publica quien envio y cuanto')
+        .addChannelTypes(ChannelType.GuildText)
     ),
   new SlashCommandBuilder()
     .setName('estadisticas')
@@ -182,6 +198,8 @@ function getGuildState(state, guildId) {
       runsChannelId: null,
       plantationChannelId: null,
       venderChannelId: null,
+      moneyReadChannelId: null,
+      moneyReportChannelId: null,
       maritimeTerrestrialPanelMessageId: null,
       runsPanelMessageId: null,
       plantationPanelMessageId: null,
@@ -215,6 +233,12 @@ function getGuildState(state, guildId) {
   }
   if (state.guilds[guildId].venderPanelMessageId === undefined) {
     state.guilds[guildId].venderPanelMessageId = null;
+  }
+  if (state.guilds[guildId].moneyReadChannelId === undefined) {
+    state.guilds[guildId].moneyReadChannelId = null;
+  }
+  if (state.guilds[guildId].moneyReportChannelId === undefined) {
+    state.guilds[guildId].moneyReportChannelId = null;
   }
 
   const runs = state.guilds[guildId].runs;
@@ -499,7 +523,9 @@ function buildChannelAssignmentText(guildConfig) {
     `- Maritimo/Terrestre -> ${formatAssignedChannel(mtChannelId)}`,
     `- RUNS -> ${formatAssignedChannel(runsChannelId)}`,
     `- Plantacion -> ${formatAssignedChannel(plantationChannelId)}`,
-    `- Vender -> ${formatAssignedChannel(venderChannelId)}`
+    `- Vender -> ${formatAssignedChannel(venderChannelId)}`,
+    `- Dinero (lectura de fotos) -> ${formatAssignedChannel(guildConfig.moneyReadChannelId)}`,
+    `- Dinero (reporte) -> ${formatAssignedChannel(guildConfig.moneyReportChannelId)}`
   ].join('\n');
 }
 
@@ -1301,7 +1327,14 @@ const STATS_MISSIONS = {
     match: (r) => r.kind === 'maritime_terrestrial' && r.type === 'terrestre'
   },
   runs: { label: 'RUNS', match: (r) => r.kind === 'runs_start' },
-  plantacion: { label: 'Plantacion', match: (r) => r.kind === 'plantation_start' }
+  plantacion: { label: 'Plantacion', match: (r) => r.kind === 'plantation_start' },
+  // Esta no cuenta entregas: suma importes. Solo entra lo que se leyo con fiabilidad.
+  dinero: {
+    label: 'Dinero enviado',
+    match: (r) => r.kind === 'money_delivery' && !r.needsReview,
+    sumField: 'amount',
+    unit: 'dinero'
+  }
 };
 
 const RANKING_PREVIEW_LIMIT = 10;
@@ -1413,10 +1446,12 @@ function resolveStatsRange({ rangeKey, desde, hasta }) {
   };
 }
 
-function countByUser(items) {
+// Sin sumField cuenta registros; con sumField suma ese campo (importes).
+function countByUser(items, sumField = null) {
   const counts = new Map();
   for (const item of items) {
-    counts.set(item.userId, (counts.get(item.userId) || 0) + 1);
+    const add = sumField ? Number(item[sumField]) || 0 : 1;
+    counts.set(item.userId, (counts.get(item.userId) || 0) + add);
   }
   return counts;
 }
@@ -1425,13 +1460,13 @@ function rankEntries(counts) {
   return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
 }
 
-function formatUserRanking(counts, limit = RANKING_PREVIEW_LIMIT) {
+function formatUserRanking(counts, limit = RANKING_PREVIEW_LIMIT, format = String) {
   const entries = rankEntries(counts);
   if (!entries.length) return ['- Sin registros en este periodo'];
 
   const lines = entries
     .slice(0, limit)
-    .map(([userId, count], index) => `${index + 1}. <@${userId}> - ${count}`);
+    .map(([userId, count], index) => `${index + 1}. <@${userId}> - ${format(count)}`);
 
   if (entries.length > limit) {
     lines.push(
@@ -1495,7 +1530,22 @@ function buildStatsText(state, guildId, { from, to, label }) {
   lines.push(`Usuarios distintos: ${new Set(plantStarts.map((r) => r.userId)).size}`);
   lines.push(...formatUserRanking(countByUser(plantStarts)));
 
-  const totalActivity = mtReports.length + runsStarts.length + plantStarts.length;
+  const moneyAll = reports.filter((r) => r.kind === 'money_delivery');
+  const moneyOk = moneyAll.filter((r) => !r.needsReview);
+  const moneyReview = moneyAll.filter((r) => r.needsReview);
+  if (moneyAll.length) {
+    const totalMoney = moneyOk.reduce((acc, r) => acc + (Number(r.amount) || 0), 0);
+    lines.push('');
+    lines.push(`### Dinero enviado (${formatAmount(totalMoney)})`);
+    lines.push(`Entregas contabilizadas: ${moneyOk.length} de ${moneyAll.length}`);
+    if (moneyReview.length) {
+      lines.push(`⚠️ ${moneyReview.length} lectura(s) dudosa(s), no sumadas.`);
+    }
+    lines.push(`Usuarios distintos: ${new Set(moneyOk.map((r) => r.userId)).size}`);
+    lines.push(...formatUserRanking(countByUser(moneyOk, 'amount'), RANKING_PREVIEW_LIMIT, formatAmount));
+  }
+
+  const totalActivity = mtReports.length + runsStarts.length + plantStarts.length + moneyAll.length;
   if (!totalActivity) {
     lines.push('');
     lines.push('No hay actividad registrada en este periodo.');
@@ -1510,7 +1560,9 @@ function buildFullRankingView(state, guildId, missionKey, range, requestedPage) 
     (r) => r.guildId === guildId && r.createdAt >= range.from && r.createdAt <= range.to && mission.match(r)
   );
 
-  const entries = rankEntries(countByUser(reports));
+  const isMoney = Boolean(mission.sumField);
+  const format = isMoney ? formatAmount : String;
+  const entries = rankEntries(countByUser(reports, mission.sumField));
   const totalPages = Math.max(1, Math.ceil(entries.length / RANKING_PAGE_SIZE));
   const page = Math.min(Math.max(0, requestedPage), totalPages - 1);
   const pageEntries = entries.slice(page * RANKING_PAGE_SIZE, (page + 1) * RANKING_PAGE_SIZE);
@@ -1518,14 +1570,21 @@ function buildFullRankingView(state, guildId, missionKey, range, requestedPage) 
   const lines = [];
   lines.push(`## ${mission.label} - lista completa de usuarios`);
   lines.push(`${range.label} | ${formatRangeHeader(range.from, range.to)}`);
-  lines.push(`**${entries.length}** usuario(s) distinto(s) | **${reports.length}** misiones en total`);
+  if (isMoney) {
+    const total = reports.reduce((acc, r) => acc + (Number(r[mission.sumField]) || 0), 0);
+    lines.push(
+      `**${entries.length}** usuario(s) distinto(s) | **${formatAmount(total)}** en ${reports.length} entrega(s)`
+    );
+  } else {
+    lines.push(`**${entries.length}** usuario(s) distinto(s) | **${reports.length}** misiones en total`);
+  }
   lines.push('');
 
   if (!entries.length) {
     lines.push('Sin registros en este periodo.');
   } else {
     for (const [index, [userId, count]] of pageEntries.entries()) {
-      lines.push(`${page * RANKING_PAGE_SIZE + index + 1}. <@${userId}> - ${count}`);
+      lines.push(`${page * RANKING_PAGE_SIZE + index + 1}. <@${userId}> - ${format(count)}`);
     }
     if (totalPages > 1) {
       lines.push('');
@@ -1798,11 +1857,107 @@ async function schedulerTick() {
   writeState(state);
 }
 
+function isImageAttachment(attachment) {
+  return (
+    attachment.contentType?.startsWith('image/') ||
+    /\.(png|jpe?g|webp|gif)$/i.test(attachment.name || '')
+  );
+}
+
+async function notifyMoneyReport(guild, guildConfig, payload) {
+  const channelId = guildConfig.moneyReportChannelId || guildConfig.mainChannelId;
+  if (!channelId) return false;
+  const channel = await guild.channels.fetch(channelId).catch(() => null);
+  if (!channel || channel.type !== ChannelType.GuildText) return false;
+  return Boolean(await channel.send(payload).catch(() => null));
+}
+
+// Lee las fotos publicadas en el canal de lectura y reporta cuanto envio cada
+// usuario en el canal de reporte.
+async function handleMoneyImage(message, state, guildConfig) {
+  const images = [...message.attachments.values()].filter(isImageAttachment);
+  if (!images.length) return;
+
+  await message.react('⏳').catch(() => null);
+
+  let total = 0;
+  let counted = 0;
+  const lines = [];
+
+  for (const image of images) {
+    let result;
+    try {
+      result = await readAmountFromUrl(image.url);
+    } catch (error) {
+      console.error('[dinero] Fallo leyendo la imagen:', error.message);
+      lines.push(`- ⚠️ No se pudo procesar \`${image.name || 'imagen'}\`: ${error.message}`);
+      continue;
+    }
+
+    if (result.amount === null) {
+      lines.push(`- ❌ No se leyo ninguna cifra. ${result.reason || ''}`.trim());
+      continue;
+    }
+
+    const label = `**${formatAmount(result.amount)}**`;
+    if (result.needsReview) {
+      lines.push(`- ⚠️ ${label} (revisar: ${result.reason || 'lectura poco fiable'})`);
+    } else {
+      lines.push(`- ✅ ${label} _(confianza ${result.confidence}%)_`);
+      total += result.amount;
+      counted += 1;
+    }
+
+    addReport(state, {
+      kind: 'money_delivery',
+      guildId: message.guildId,
+      userId: message.author.id,
+      amount: result.amount,
+      needsReview: Boolean(result.needsReview),
+      confidence: result.confidence ?? null,
+      evidenceUrl: image.url,
+      messageUrl: message.url,
+      createdAt: Date.now()
+    });
+  }
+
+  writeState(state);
+
+  const header =
+    counted > 0
+      ? `💵 ${message.author} envio **${formatAmount(total)}**` +
+        (images.length > 1 ? ` en ${counted} de ${images.length} imagenes.` : '.')
+      : `⚠️ ${message.author} envio una imagen pero no se pudo contabilizar.`;
+
+  const sent = await notifyMoneyReport(message.guild, guildConfig, {
+    content: [header, ...lines, `[Ver mensaje original](${message.url})`].join('\n'),
+    allowedMentions: { users: [message.author.id] }
+  });
+
+  await message.reactions.cache.get('⏳')?.users.remove(client.user.id).catch(() => null);
+  await message.react(counted > 0 ? '✅' : '⚠️').catch(() => null);
+
+  if (!sent) {
+    console.error('[dinero] No se pudo publicar en el canal de reporte.');
+  }
+}
+
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot || !message.guildId) return;
 
   const state = ensureRuntimeState(readState());
   const guildConfig = getGuildState(state, message.guildId);
+
+  if (
+    guildConfig.moneyReadChannelId &&
+    message.channelId === guildConfig.moneyReadChannelId &&
+    message.attachments.size > 0
+  ) {
+    await handleMoneyImage(message, state, guildConfig).catch((error) =>
+      console.error('[dinero] Error inesperado:', error)
+    );
+    return;
+  }
 
   const key = createEvidenceKey(message.guildId, message.author.id);
   const pending = state.pendingEvidence[key];
@@ -1991,6 +2146,52 @@ client.on(Events.InteractionCreate, async (interaction) => {
           `Asignación actualizada para **${taskSettings.label}** en ${targetChannel}.\n` +
           `${panelStatusText}\n\n` +
           buildChannelAssignmentText(guildConfig),
+        ephemeral: true
+      });
+      return;
+    }
+
+    if (interaction.commandName === 'config_dinero') {
+      if (!isAdmin(interaction)) {
+        await interaction.reply({
+          content: '⛔ Solo administradores pueden usar este comando.',
+          ephemeral: true
+        });
+        return;
+      }
+
+      const readChannel = interaction.options.getChannel('lectura');
+      const reportChannel = interaction.options.getChannel('reporte');
+
+      if (!readChannel && !reportChannel) {
+        await interaction.reply({
+          content:
+            'Indica al menos un canal.\n' +
+            '`lectura` = donde se publican las fotos. `reporte` = donde el bot avisa de quien envio y cuanto.\n\n' +
+            `Ahora mismo:\n- Lectura: ${formatAssignedChannel(guildConfig.moneyReadChannelId)}\n` +
+            `- Reporte: ${formatAssignedChannel(guildConfig.moneyReportChannelId)}`,
+          ephemeral: true
+        });
+        return;
+      }
+
+      if (readChannel) guildConfig.moneyReadChannelId = readChannel.id;
+      if (reportChannel) guildConfig.moneyReportChannelId = reportChannel.id;
+      writeState(state);
+
+      const pending = !guildConfig.moneyReportChannelId
+        ? '\n⚠️ Falta el canal de reporte: por ahora los avisos iran al canal Main.'
+        : !guildConfig.moneyReadChannelId
+          ? '\n⚠️ Falta el canal de lectura: el bot todavia no leera ninguna foto.'
+          : '';
+
+      await interaction.reply({
+        content:
+          '### Conteo de dinero configurado\n' +
+          `- Lectura de fotos: ${formatAssignedChannel(guildConfig.moneyReadChannelId)}\n` +
+          `- Reporte: ${formatAssignedChannel(guildConfig.moneyReportChannelId)}${pending}\n\n` +
+          'El bot leera cada imagen publicada en el canal de lectura y publicara ' +
+          'en el de reporte quien la envio y que cantidad detecto.',
         ephemeral: true
       });
       return;

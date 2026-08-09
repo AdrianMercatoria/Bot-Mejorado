@@ -85,6 +85,9 @@ Publicado automáticamente en el canal Main. Contiene:
 - **Limpiar canal MT/RUNS/Plantacion** — Elimina mensajes viejos y republica el panel
 - **▶️ Iniciar / ⛔ Detener Vender** — Controla la notificación cíclica de Vender
 
+### Comando `/config_dinero`
+Configura el conteo automático de dinero leyendo las fotos que envían los usuarios. Ver [Conteo automatico de dinero por fotos](#conteo-automatico-de-dinero-por-fotos).
+
 ### Paneles siempre como último mensaje
 Los paneles de misión (MT, RUNS, Plantacion) se reposicionan automáticamente al final del canal si hay mensajes más recientes. El scheduler los verifica cada 30 segundos.
 
@@ -120,6 +123,48 @@ El panel de RUNS muestra cuántos usuarios únicos han iniciado RUNS desde que s
 ## Flujo Plantacion
 - **Ramas**: eliges `Ramas`, escribes cantidad de semillas, inicia ciclo 1/2 (3h por defecto por ciclo), marcas cada ciclo, y al completar 2/2 aparece opcion para agregar un ciclo extra o finalizar.
 - **Duplicado**: eliges `Duplicado`, escribes cantidad de semillas y haces un ciclo unico de 3h para finalizar.
+
+## Conteo automatico de dinero por fotos
+
+El bot lee las capturas que los usuarios publican en un canal y reporta en otro canal quien envio y cuanto.
+
+### Configuracion
+```
+/config_dinero lectura:#entregas reporte:#control-dinero
+```
+- **lectura**: canal donde los usuarios publican las fotos.
+- **reporte**: canal donde el bot avisa de quien envio y que cantidad detecto.
+
+Puedes indicar solo uno de los dos y completar el otro despues. Si falta el de reporte, los avisos van al canal Main.
+
+### Como funciona
+1. Un usuario publica una foto en el canal de lectura.
+2. El bot reacciona con ⏳ mientras la procesa (~0,5 s por imagen).
+3. Publica en el canal de reporte: quien la envio, la cantidad y el enlace al mensaje original.
+4. Marca el mensaje con ✅ si la conto, o ⚠️ si no pudo.
+
+Lee sufijos: `440K` = 440.000, `1.2M` = 1.200.000. **La cifra con sufijo es el total**; el numero pequeño del stack no se multiplica.
+
+Las cantidades entran en `/estadisticas` como **Dinero enviado**, con total del periodo y ranking por usuario (suma de importes, no numero de entregas).
+
+### Cuando pide revision
+El bot **no suma** una lectura y la marca con ⚠️ cuando:
+- La cifra no trae sufijo K/M. Un `440` que en realidad era `440K` se quedaria 1000 veces corto, asi que prefiere avisar antes que contar mal.
+- La confianza del OCR sobre esa cifra baja del 60%.
+- No encuentra ninguna cifra en la imagen.
+
+Esas lecturas quedan registradas y se muestran aparte en las estadisticas, pero no suman al total.
+
+### Calibrar con tus capturas
+El acierto depende de como se vean tus imagenes. Antes de confiar en el conteo, pasa unas cuantas capturas reales por:
+
+```
+npm run probar-ocr -- C:\ruta\a\capturas
+```
+
+Muestra por cada imagen la cifra detectada, la confianza y si se contabilizaria. Si salen muchas a revisar, hay margen para ajustar el preprocesado.
+
+> El OCR es local y gratuito (`tesseract.js`), sin API ni coste por imagen. La primera ejecucion descarga ~15 MB de datos de idioma y los cachea en tu carpeta de datos; a partir de ahi funciona sin internet.
 
 ## Conservar los datos entre actualizaciones
 

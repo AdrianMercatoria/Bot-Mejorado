@@ -1,3 +1,6 @@
 node_modules/
 .env
 data/*.json
+# Datos de idioma que tesseract.js descarga y cachea la primera vez
+data/*.traineddata
+data/*.traineddata.gz

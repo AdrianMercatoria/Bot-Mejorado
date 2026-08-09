@@ -6,13 +6,16 @@
   "type": "commonjs",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "node --watch src/index.js"
+    "dev": "node --watch src/index.js",
+    "probar-ocr": "node tools/probar-ocr.js"
   },
   "engines": {
     "node": ">=18.18.0"
   },
   "dependencies": {
     "discord.js": "^14.21.0",
-    "dotenv": "^16.6.1"
+    "dotenv": "^16.6.1",
+    "jimp": "^1.6.1",
+    "tesseract.js": "^7.0.0"
   }
 }
