@@ -98,7 +98,9 @@ Permite a administradores cambiar el cooldown de cualquier tarea:
 ### Estadisticas por mision y por periodo
 Boton **📊 Estadisticas** del Panel de Administración, o comando `/estadisticas`.
 
-Muestra, para cada mision (Marítimo, Terrestre, RUNS, Plantacion): total de misiones, usuarios distintos y ranking de quien la hizo (top 10). En RUNS ademas separa iniciadas / finalizadas / cerradas automaticamente; en Plantacion suma ciclos marcados y semillas usadas.
+Muestra, para cada mision (Marítimo, Terrestre, RUNS, Plantacion): total de misiones, usuarios distintos y ranking de quien la hizo. En RUNS ademas separa iniciadas / finalizadas / cerradas automaticamente; en Plantacion suma ciclos marcados y semillas usadas.
+
+El resumen muestra los 10 primeros de cada mision. Para ver **todos** los usuarios usa el menu **"Ver lista completa de usuarios de..."**: abre el ranking completo de esa mision, paginado de 20 en 20, con botones `◀ Anterior`, `Siguiente ▶` y `↩ Volver al resumen`. El periodo elegido se mantiene al navegar.
 
 El boton abre con los ultimos 7 dias y trae un menu para cambiar el periodo (24h, 7 dias, 30 dias, historico). Para rangos exactos usa el comando:
 - `/estadisticas rango:Ultimas 24 horas`
@@ -118,6 +120,29 @@ El panel de RUNS muestra cuántos usuarios únicos han iniciado RUNS desde que s
 ## Flujo Plantacion
 - **Ramas**: eliges `Ramas`, escribes cantidad de semillas, inicia ciclo 1/2 (3h por defecto por ciclo), marcas cada ciclo, y al completar 2/2 aparece opcion para agregar un ciclo extra o finalizar.
 - **Duplicado**: eliges `Duplicado`, escribes cantidad de semillas y haces un ciclo unico de 3h para finalizar.
+
+## Conservar los datos entre actualizaciones
+
+El bot guarda todo (configuracion, cooldowns, historial de reportes) en `state.json`. Hay dos protecciones:
+
+**1. Guarda tu base de datos fuera del proyecto.** Configura `DATA_DIR` en tu `.env` con una ruta que NO este dentro de la carpeta del bot:
+
+```
+DATA_DIR=C:\BotMejoradoDatos       # Windows
+DATA_DIR=/var/lib/bot-mejorado     # Linux
+```
+
+Asi puedes reemplazar, reinstalar o volver a clonar la carpeta del bot sin perder nada. Si dejas `DATA_DIR` vacio, los datos viven en `data/` dentro del proyecto y **se pierden si reemplazas la carpeta al actualizar**. El bot avisa de esto en consola al arrancar.
+
+**2. Respaldo automatico y escritura segura.** El estado se escribe primero en un archivo temporal y luego se reemplaza de golpe, asi que apagar el bot a mitad de un guardado ya no puede corromper el archivo. Ademas se mantiene `state.backup.json`, y si `state.json` aparece corrupto o vacio, el bot **restaura desde el respaldo** en vez de arrancar en blanco. El archivo dañado se conserva como `state.corrupto-<fecha>.json` por si quieres revisarlo.
+
+> Al arrancar, el bot imprime donde vive la base de datos y cuantos servidores y reportes cargo. Si ves `0 servidor(es), 0 reporte(s)` cuando esperabas datos, estas apuntando a la carpeta equivocada.
+
+### Antes de actualizar
+1. Para el bot.
+2. Copia tu carpeta de datos (la que indique el log de arranque) a un lugar seguro.
+3. Actualiza el codigo.
+4. Arranca y confirma en el log que cargo tus servidores y reportes.
 
 ## Verificacion Visual
 Abre `preview/panel-preview.html` en el navegador para simular los paneles sin Discord: Maritimo/Terrestre, RUNS, Plantacion, asignacion de canales y los botones del Main (`Ver estado`, `Ver canales`, `Recrear panel Plantacion`, `Estadisticas`).

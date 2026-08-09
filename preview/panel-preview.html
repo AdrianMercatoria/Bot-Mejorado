@@ -257,6 +257,18 @@
         </select>
       </div>
       <div class="row">
+        <label for="stats-mission" class="muted">Ver lista completa de:</label>
+        <select id="stats-mission">
+          <option value="">(resumen general)</option>
+          <option value="maritimo">Maritimo</option>
+          <option value="terrestre">Terrestre</option>
+          <option value="runs">RUNS</option>
+          <option value="plantacion">Plantacion</option>
+        </select>
+        <button id="stats-prev" class="secondary" disabled>◀ Anterior</button>
+        <button id="stats-next" class="secondary" disabled>Siguiente ▶</button>
+      </div>
+      <div class="row">
         <label for="stats-from" class="muted">Desde:</label>
         <input id="stats-from" type="date" />
         <label for="stats-to" class="muted">Hasta:</label>
@@ -294,6 +306,9 @@
     const statsRange = document.getElementById('stats-range');
     const statsFrom = document.getElementById('stats-from');
     const statsTo = document.getElementById('stats-to');
+    const statsMission = document.getElementById('stats-mission');
+    const statsPrev = document.getElementById('stats-prev');
+    const statsNext = document.getElementById('stats-next');
     const plantStatus = document.getElementById('plant-status');
     const plantSeeds = document.getElementById('plant-seeds');
     const plantStart = document.getElementById('plant-start');
@@ -381,10 +396,36 @@
         const { list, hoursAgo, ...rest } = item;
         stats[list].push({ ...rest, at: base - hoursAgo * HOUR, demo: true });
       }
+
+      // Grupo grande para poder verificar el caso "mas de 10 usuarios" y la
+      // paginacion: 44 usuarios extra repartidos en los ultimos 20 dias.
+      for (let n = 1; n <= 44; n++) {
+        const user = `miembro_${String(n).padStart(2, '0')}`;
+        const veces = (n % 3) + 1;
+        for (let i = 0; i < veces; i++) {
+          const hoursAgo = (n * 7 + i * 13) % 480;
+          const type = n % 2 === 0 ? 'maritimo' : 'terrestre';
+          stats.mtHistory.push({ user, type, hours: type === 'maritimo' ? 24 : 8, at: base - hoursAgo * HOUR, demo: true });
+        }
+        if (n % 2 === 0) {
+          stats.runsStarts.push({ user, at: base - ((n * 11) % 400) * HOUR, demo: true });
+        }
+      }
+
       for (const list of Object.values(stats)) {
         list.sort((a, b) => a.at - b.at);
       }
     }
+
+    const PREVIEW_MISSIONS = {
+      maritimo: { label: 'Maritimo', pick: () => stats.mtHistory.filter((x) => x.type === 'maritimo') },
+      terrestre: { label: 'Terrestre', pick: () => stats.mtHistory.filter((x) => x.type === 'terrestre') },
+      runs: { label: 'RUNS', pick: () => stats.runsStarts },
+      plantacion: { label: 'Plantacion', pick: () => stats.plantationStarts }
+    };
+
+    const RANKING_PAGE_SIZE = 20;
+    let statsPage = 0;
 
     function renderAssignments() {
       assignmentStatus.textContent =
@@ -550,17 +591,55 @@
       return items.filter((item) => item.at >= from && item.at <= to);
     }
 
-    function rankUsers(items, limit = 10) {
+    function rankEntries(items) {
       const counts = new Map();
       for (const item of items) {
         counts.set(item.user, (counts.get(item.user) || 0) + 1);
       }
-      const entries = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+      return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+    }
+
+    function rankUsers(items, limit = 10) {
+      const entries = rankEntries(items);
       if (!entries.length) return ['- Sin registros en este periodo'];
 
       const lines = entries.slice(0, limit).map(([user, count], i) => `${i + 1}. ${user} - ${count}`);
-      if (entries.length > limit) lines.push(`... y ${entries.length - limit} usuario(s) mas`);
+      if (entries.length > limit) {
+        lines.push(`... y ${entries.length - limit} usuario(s) mas. Usa "Ver lista completa".`);
+      }
       return lines;
+    }
+
+    function showFullRanking(range, missionKey) {
+      const mission = PREVIEW_MISSIONS[missionKey];
+      const items = inRange(mission.pick(), range.from, range.to);
+      const entries = rankEntries(items);
+      const totalPages = Math.max(1, Math.ceil(entries.length / RANKING_PAGE_SIZE));
+      statsPage = Math.min(Math.max(0, statsPage), totalPages - 1);
+      const slice = entries.slice(statsPage * RANKING_PAGE_SIZE, (statsPage + 1) * RANKING_PAGE_SIZE);
+
+      const fmt = (ms) => new Date(ms).toLocaleString();
+      const lines = [];
+      lines.push(`## ${mission.label} - lista completa de usuarios`);
+      lines.push(`${range.label} | Desde ${range.from > 0 ? fmt(range.from) : 'el inicio'} hasta ${fmt(range.to)}`);
+      lines.push(`${entries.length} usuario(s) distinto(s) | ${items.length} misiones en total`);
+      lines.push('');
+
+      if (!entries.length) {
+        lines.push('Sin registros en este periodo.');
+      } else {
+        slice.forEach(([user, count], i) => {
+          lines.push(`${statsPage * RANKING_PAGE_SIZE + i + 1}. ${user} - ${count}`);
+        });
+        if (totalPages > 1) {
+          lines.push('');
+          lines.push(`Pagina ${statsPage + 1} de ${totalPages}`);
+        }
+      }
+
+      statsPrev.disabled = statsPage <= 0;
+      statsNext.disabled = statsPage >= totalPages - 1;
+      statsOutput.textContent = lines.join('\n');
     }
 
     function showMainStats() {
@@ -569,8 +648,18 @@
 
       if (range.error) {
         statsOutput.textContent = range.error;
+        statsPrev.disabled = true;
+        statsNext.disabled = true;
         return;
       }
+
+      if (statsMission.value) {
+        showFullRanking(range, statsMission.value);
+        return;
+      }
+
+      statsPrev.disabled = true;
+      statsNext.disabled = true;
 
       const { from, to, label } = range;
       const mt = inRange(stats.mtHistory, from, to);
@@ -817,8 +906,29 @@
     statsRange.addEventListener('change', () => {
       statsFrom.value = '';
       statsTo.value = '';
+      statsPage = 0;
       showMainStats();
       write(`Estadisticas: periodo cambiado a ${RANGE_PRESETS[statsRange.value].label}.`);
+    });
+
+    statsMission.addEventListener('change', () => {
+      statsPage = 0;
+      showMainStats();
+      write(
+        statsMission.value
+          ? `Estadisticas: lista completa de ${PREVIEW_MISSIONS[statsMission.value].label}.`
+          : 'Estadisticas: vuelta al resumen general.'
+      );
+    });
+
+    statsPrev.addEventListener('click', () => {
+      statsPage -= 1;
+      showMainStats();
+    });
+
+    statsNext.addEventListener('click', () => {
+      statsPage += 1;
+      showMainStats();
     });
 
     statsFrom.addEventListener('change', showMainStats);
@@ -827,6 +937,7 @@
     document.getElementById('stats-clear').addEventListener('click', () => {
       statsFrom.value = '';
       statsTo.value = '';
+      statsPage = 0;
       showMainStats();
       write('Estadisticas: fechas personalizadas limpiadas.');
     });

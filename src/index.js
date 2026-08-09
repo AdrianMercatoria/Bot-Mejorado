@@ -15,7 +15,7 @@ const {
   SlashCommandBuilder,
   StringSelectMenuBuilder
 } = require('discord.js');
-const { readState, writeState } = require('./storage');
+const { readState, writeState, getStorageInfo } = require('./storage');
 const { addHours, formatDuration } = require('./time');
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
@@ -1290,20 +1290,69 @@ const RANGE_PRESETS = {
   all: { label: 'Historico completo', ms: null }
 };
 
-function buildStatsRangeMenu() {
-  return [
-    new ActionRowBuilder().addComponents(
-      new StringSelectMenuBuilder()
-        .setCustomId('stats:range')
-        .setPlaceholder('Elige el periodo a consultar')
-        .addOptions(
-          Object.entries(RANGE_PRESETS).map(([value, preset]) => ({
-            label: preset.label,
-            value
-          }))
-        )
-    )
-  ];
+// Misiones que producen un ranking por usuario.
+const STATS_MISSIONS = {
+  maritimo: {
+    label: 'Maritimo',
+    match: (r) => r.kind === 'maritime_terrestrial' && r.type === 'maritimo'
+  },
+  terrestre: {
+    label: 'Terrestre',
+    match: (r) => r.kind === 'maritime_terrestrial' && r.type === 'terrestre'
+  },
+  runs: { label: 'RUNS', match: (r) => r.kind === 'runs_start' },
+  plantacion: { label: 'Plantacion', match: (r) => r.kind === 'plantation_start' }
+};
+
+const RANKING_PREVIEW_LIMIT = 10;
+const RANKING_PAGE_SIZE = 20;
+
+// El rango viaja dentro del customId para que la vista no cambie al pasar el tiempo.
+function encodeRange(range) {
+  return `${range.key}:${range.from}:${range.to}`;
+}
+
+function decodeRange(key, fromRaw, toRaw) {
+  const from = Number(fromRaw);
+  const to = Number(toRaw);
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return null;
+  const label = key === 'custom' ? 'Rango personalizado' : RANGE_PRESETS[key]?.label;
+  if (!label) return null;
+  return { key, from, to, label };
+}
+
+function buildStatsRangeMenu(range) {
+  return new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId('stats:range')
+      .setPlaceholder(`Periodo: ${range.label}`)
+      .addOptions(
+        Object.entries(RANGE_PRESETS).map(([value, preset]) => ({
+          label: preset.label,
+          value,
+          default: value === range.key
+        }))
+      )
+  );
+}
+
+function buildStatsMissionMenu(range) {
+  return new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId(`stats:mission:${encodeRange(range)}`)
+      .setPlaceholder('Ver lista completa de usuarios de...')
+      .addOptions(
+        Object.entries(STATS_MISSIONS).map(([value, mission]) => ({
+          label: mission.label,
+          description: `Todos los usuarios que hicieron ${mission.label}`,
+          value
+        }))
+      )
+  );
+}
+
+function buildStatsComponents(range) {
+  return [buildStatsRangeMenu(range), buildStatsMissionMenu(range)];
 }
 
 function parseDateInput(raw, endOfDay = false) {
@@ -1351,11 +1400,13 @@ function resolveStatsRange({ rangeKey, desde, hasta }) {
     if (from > to) {
       return { error: 'El inicio del rango es posterior al final. Revisa las fechas.' };
     }
-    return { from, to, label: 'Rango personalizado' };
+    return { key: 'custom', from, to, label: 'Rango personalizado' };
   }
 
-  const preset = RANGE_PRESETS[rangeKey] || RANGE_PRESETS['7d'];
+  const key = RANGE_PRESETS[rangeKey] ? rangeKey : '7d';
+  const preset = RANGE_PRESETS[key];
   return {
+    key,
     from: preset.ms === null ? 0 : now - preset.ms,
     to: now,
     label: preset.label
@@ -1370,8 +1421,12 @@ function countByUser(items) {
   return counts;
 }
 
-function formatUserRanking(counts, limit = 10) {
-  const entries = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+function rankEntries(counts) {
+  return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+}
+
+function formatUserRanking(counts, limit = RANKING_PREVIEW_LIMIT) {
+  const entries = rankEntries(counts);
   if (!entries.length) return ['- Sin registros en este periodo'];
 
   const lines = entries
@@ -1379,7 +1434,9 @@ function formatUserRanking(counts, limit = 10) {
     .map(([userId, count], index) => `${index + 1}. <@${userId}> - ${count}`);
 
   if (entries.length > limit) {
-    lines.push(`... y ${entries.length - limit} usuario(s) mas`);
+    lines.push(
+      `... y ${entries.length - limit} usuario(s) mas. Usa el menu "Ver lista completa" de abajo.`
+    );
   }
   return lines;
 }
@@ -1445,6 +1502,59 @@ function buildStatsText(state, guildId, { from, to, label }) {
   }
 
   return truncateForDiscord(lines.join('\n'));
+}
+
+function buildFullRankingView(state, guildId, missionKey, range, requestedPage) {
+  const mission = STATS_MISSIONS[missionKey];
+  const reports = state.reports.filter(
+    (r) => r.guildId === guildId && r.createdAt >= range.from && r.createdAt <= range.to && mission.match(r)
+  );
+
+  const entries = rankEntries(countByUser(reports));
+  const totalPages = Math.max(1, Math.ceil(entries.length / RANKING_PAGE_SIZE));
+  const page = Math.min(Math.max(0, requestedPage), totalPages - 1);
+  const pageEntries = entries.slice(page * RANKING_PAGE_SIZE, (page + 1) * RANKING_PAGE_SIZE);
+
+  const lines = [];
+  lines.push(`## ${mission.label} - lista completa de usuarios`);
+  lines.push(`${range.label} | ${formatRangeHeader(range.from, range.to)}`);
+  lines.push(`**${entries.length}** usuario(s) distinto(s) | **${reports.length}** misiones en total`);
+  lines.push('');
+
+  if (!entries.length) {
+    lines.push('Sin registros en este periodo.');
+  } else {
+    for (const [index, [userId, count]] of pageEntries.entries()) {
+      lines.push(`${page * RANKING_PAGE_SIZE + index + 1}. <@${userId}> - ${count}`);
+    }
+    if (totalPages > 1) {
+      lines.push('');
+      lines.push(`Pagina ${page + 1} de ${totalPages}`);
+    }
+  }
+
+  const encoded = encodeRange(range);
+  const navRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`stats:page:${missionKey}:${encoded}:${page - 1}`)
+      .setLabel('◀ Anterior')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(page <= 0),
+    new ButtonBuilder()
+      .setCustomId(`stats:page:${missionKey}:${encoded}:${page + 1}`)
+      .setLabel('Siguiente ▶')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(page >= totalPages - 1),
+    new ButtonBuilder()
+      .setCustomId(`stats:back:${encoded}`)
+      .setLabel('↩ Volver al resumen')
+      .setStyle(ButtonStyle.Primary)
+  );
+
+  return {
+    content: truncateForDiscord(lines.join('\n')),
+    components: [buildStatsMissionMenu(range), navRow]
+  };
 }
 
 function buildEstadoText(state, guildId, guildConfig, guildTasks) {
@@ -1949,8 +2059,25 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const range = resolveStatsRange({ rangeKey: interaction.values[0] });
     await interaction.update({
       content: buildStatsText(state, interaction.guildId, range),
-      components: buildStatsRangeMenu()
+      components: buildStatsComponents(range)
     });
+    return;
+  }
+
+  if (interaction.isStringSelectMenu() && interaction.customId.startsWith('stats:mission:')) {
+    const [, , rangeKey, from, to] = interaction.customId.split(':');
+    const range = decodeRange(rangeKey, from, to);
+    const missionKey = interaction.values[0];
+
+    if (!range || !STATS_MISSIONS[missionKey]) {
+      await interaction.reply({
+        content: 'Esta vista de estadisticas ya expiro. Vuelve a abrir Estadisticas.',
+        ephemeral: true
+      });
+      return;
+    }
+
+    await interaction.update(buildFullRankingView(state, interaction.guildId, missionKey, range, 0));
     return;
   }
 
@@ -1992,8 +2119,45 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const range = resolveStatsRange({ rangeKey: '7d' });
       await interaction.reply({
         content: buildStatsText(state, interaction.guildId, range),
-        components: buildStatsRangeMenu(),
+        components: buildStatsComponents(range),
         ephemeral: true
+      });
+      return;
+    }
+
+    if (interaction.customId.startsWith('stats:page:')) {
+      const [, , missionKey, rangeKey, from, to, pageRaw] = interaction.customId.split(':');
+      const range = decodeRange(rangeKey, from, to);
+
+      if (!range || !STATS_MISSIONS[missionKey]) {
+        await interaction.reply({
+          content: 'Esta vista de estadisticas ya expiro. Vuelve a abrir Estadisticas.',
+          ephemeral: true
+        });
+        return;
+      }
+
+      await interaction.update(
+        buildFullRankingView(state, interaction.guildId, missionKey, range, Number(pageRaw) || 0)
+      );
+      return;
+    }
+
+    if (interaction.customId.startsWith('stats:back:')) {
+      const [, , rangeKey, from, to] = interaction.customId.split(':');
+      const range = decodeRange(rangeKey, from, to);
+
+      if (!range) {
+        await interaction.reply({
+          content: 'Esta vista de estadisticas ya expiro. Vuelve a abrir Estadisticas.',
+          ephemeral: true
+        });
+        return;
+      }
+
+      await interaction.update({
+        content: buildStatsText(state, interaction.guildId, range),
+        components: buildStatsComponents(range)
       });
       return;
     }
@@ -2209,6 +2373,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
 client.once(Events.ClientReady, async (readyClient) => {
   console.log(`[OK] Bot conectado como ${readyClient.user.tag} (${readyClient.user.id})`);
+
+  const storageInfo = getStorageInfo();
+  const currentState = readState();
+  console.log(
+    `[DATOS] Base de datos en: ${storageInfo.stateFile}\n` +
+    `        Contenido actual: ${Object.keys(currentState.guilds || {}).length} servidor(es), ` +
+    `${(currentState.reports || []).length} reporte(s)\n` +
+    `        Respaldo automatico: ${storageInfo.backupFile}` +
+    (process.env.DATA_DIR
+      ? ''
+      : '\n        [AVISO] Los datos viven dentro de la carpeta del proyecto. Si reemplazas la carpeta al actualizar, se pierden.' +
+        '\n                Configura DATA_DIR en tu .env con una ruta fuera del proyecto para evitarlo.')
+  );
+
   setInterval(() => {
     schedulerTick().catch((err) => console.error('Scheduler error:', err));
   }, 30 * 1000);
