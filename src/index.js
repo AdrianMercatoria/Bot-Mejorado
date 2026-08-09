@@ -13,7 +13,8 @@ const {
   REST,
   Routes,
   SlashCommandBuilder,
-  StringSelectMenuBuilder
+  StringSelectMenuBuilder,
+  ChannelSelectMenuBuilder
 } = require('discord.js');
 const { readState, writeState, getStorageInfo } = require('./storage');
 const { addHours, formatDuration } = require('./time');
@@ -392,6 +393,10 @@ function buildAdminPanelButtons(guildConfig) {
       new ButtonBuilder()
         .setCustomId('main:stats')
         .setLabel('📊 Estadisticas')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId('main:dinero')
+        .setLabel('💵 Canales de dinero')
         .setStyle(ButtonStyle.Primary)
     ),
     new ActionRowBuilder().addComponents(
@@ -445,6 +450,57 @@ function buildAdminPanelPayload(guildConfig) {
     `CDs personalizados: ${cdText}\n` +
     '_Usa `/config_cd` para cambiar cooldowns._';
   return { content, components: buildAdminPanelButtons(guildConfig) };
+}
+
+// Panel para asignar los canales del conteo de dinero desde el Main,
+// sin tener que recordar la sintaxis de ningun comando.
+function buildMoneyChannelPayload(guildConfig) {
+  const read = guildConfig.moneyReadChannelId;
+  const report = guildConfig.moneyReportChannelId;
+
+  const lines = [];
+  lines.push('### 💵 Canales del conteo de dinero');
+  lines.push(`- **Lectura de fotos**: ${formatAssignedChannel(read)}`);
+  lines.push(`- **Reporte**: ${formatAssignedChannel(report)}`);
+  lines.push('');
+
+  if (read && report) {
+    lines.push('Listo. El bot leera cada imagen del canal de lectura y publicara en el de reporte quien envio y cuanto.');
+  } else if (!read) {
+    lines.push('⚠️ Falta el canal de **lectura**: todavia no se procesara ninguna foto.');
+  } else {
+    lines.push('⚠️ Falta el canal de **reporte**: los avisos iran al canal Main mientras tanto.');
+  }
+
+  return {
+    content: lines.join('\n'),
+    components: [
+      new ActionRowBuilder().addComponents(
+        new ChannelSelectMenuBuilder()
+          .setCustomId('money:read')
+          .setPlaceholder('📸 Canal donde se publican las fotos')
+          .addChannelTypes(ChannelType.GuildText)
+          .setMinValues(1)
+          .setMaxValues(1)
+      ),
+      new ActionRowBuilder().addComponents(
+        new ChannelSelectMenuBuilder()
+          .setCustomId('money:report')
+          .setPlaceholder('💵 Canal donde el bot reporta quien envio y cuanto')
+          .addChannelTypes(ChannelType.GuildText)
+          .setMinValues(1)
+          .setMaxValues(1)
+      ),
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('money:clear')
+          .setLabel('Desactivar el conteo')
+          .setStyle(ButtonStyle.Danger)
+          .setDisabled(!read && !report)
+      )
+    ],
+    ephemeral: true
+  };
 }
 
 function getTaskChannelId(guildConfig, taskKey) {
@@ -2283,6 +2339,26 @@ client.on(Events.InteractionCreate, async (interaction) => {
     return;
   }
 
+  if (interaction.isChannelSelectMenu() && interaction.customId.startsWith('money:')) {
+    if (!isAdmin(interaction)) {
+      await interaction.reply({
+        content: '⛔ Solo administradores pueden cambiar estos canales.',
+        ephemeral: true
+      });
+      return;
+    }
+
+    const target = interaction.customId.split(':')[1];
+    const channelId = interaction.values[0];
+
+    if (target === 'read') guildConfig.moneyReadChannelId = channelId;
+    else if (target === 'report') guildConfig.moneyReportChannelId = channelId;
+    writeState(state);
+
+    await interaction.update(buildMoneyChannelPayload(guildConfig));
+    return;
+  }
+
   if (!interaction.isButton()) return;
 
   try {
@@ -2361,6 +2437,33 @@ client.on(Events.InteractionCreate, async (interaction) => {
         content: buildStatsText(state, interaction.guildId, range),
         components: buildStatsComponents(range)
       });
+      return;
+    }
+
+    if (interaction.customId === 'main:dinero') {
+      if (!isAdmin(interaction)) {
+        await interaction.reply({
+          content: '⛔ Solo administradores pueden usar esta accion.',
+          ephemeral: true
+        });
+        return;
+      }
+      await interaction.reply(buildMoneyChannelPayload(guildConfig));
+      return;
+    }
+
+    if (interaction.customId === 'money:clear') {
+      if (!isAdmin(interaction)) {
+        await interaction.reply({
+          content: '⛔ Solo administradores pueden usar esta accion.',
+          ephemeral: true
+        });
+        return;
+      }
+      guildConfig.moneyReadChannelId = null;
+      guildConfig.moneyReportChannelId = null;
+      writeState(state);
+      await interaction.update(buildMoneyChannelPayload(guildConfig));
       return;
     }
 

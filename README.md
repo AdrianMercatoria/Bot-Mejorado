@@ -81,6 +81,7 @@ Publicado automáticamente en el canal Main. Contiene:
 - **Ver canales** — Canales asignados por tarea
 - **Evidencias pendientes** — Lista y permite cancelar evidencias no enviadas
 - **📊 Estadisticas** — Estadisticas generales por mision en un rango de tiempo
+- **💵 Canales de dinero** — Asigna con desplegables el canal de lectura de fotos y el de reporte
 - **Recrear panel MT/RUNS/Plantacion** — Fuerza republicar cada panel
 - **Limpiar canal MT/RUNS/Plantacion** — Elimina mensajes viejos y republica el panel
 - **▶️ Iniciar / ⛔ Detener Vender** — Controla la notificación cíclica de Vender
@@ -128,14 +129,17 @@ El panel de RUNS muestra cuántos usuarios únicos han iniciado RUNS desde que s
 
 El bot lee las capturas que los usuarios publican en un canal y reporta en otro canal quien envio y cuanto.
 
-### Configuracion
-```
-/config_dinero lectura:#entregas reporte:#control-dinero
-```
-- **lectura**: canal donde los usuarios publican las fotos.
-- **reporte**: canal donde el bot avisa de quien envio y que cantidad detecto.
+### Configuracion (desde el panel de administracion)
+Pulsa **💵 Canales de dinero** en el panel del Main. Se abre un mensaje privado con dos desplegables:
 
-Puedes indicar solo uno de los dos y completar el otro despues. Si falta el de reporte, los avisos van al canal Main.
+- **📸 Canal de lectura**: donde los usuarios publican las fotos.
+- **💵 Canal de reporte**: donde el bot avisa de quien envio y que cantidad detecto.
+
+Eliges cada uno de la lista de canales del servidor y el panel se actualiza al momento indicando lo que falta. El boton **Desactivar el conteo** borra ambas asignaciones y detiene la lectura.
+
+Puedes asignar solo uno de los dos y completar el otro despues. Si falta el de reporte, los avisos van al canal Main.
+
+> Tambien existe el comando `/config_dinero lectura:#canal reporte:#canal` si prefieres escribirlo.
 
 ### Como funciona
 1. Un usuario publica una foto en el canal de lectura.
