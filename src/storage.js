@@ -10,16 +10,23 @@ const DATA_DIR = process.env.DATA_DIR
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
 const BACKUP_FILE = path.join(DATA_DIR, 'state.backup.json');
 const TMP_FILE = path.join(DATA_DIR, 'state.tmp.json');
+const BACKUP_TMP_FILE = path.join(DATA_DIR, 'state.backup.tmp.json');
 
 const BACKUP_MIN_INTERVAL_MS = 60 * 1000;
+const READ_ATTEMPTS = 5;
+const READ_RETRY_MS = 50;
 
-const defaultState = {
-  guilds: {},
-  tasks: {},
-  reports: [],
-  pendingEvidence: {},
-  pendingPlantation: {}
-};
+// Cada llamada devuelve objetos nuevos: nunca se comparte una instancia entre
+// estados, porque los handlers mutan el estado que reciben.
+function createDefaultState() {
+  return {
+    guilds: {},
+    tasks: {},
+    reports: [],
+    pendingEvidence: {},
+    pendingPlantation: {}
+  };
+}
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) {
@@ -27,30 +34,58 @@ function ensureDataDir() {
   }
 }
 
+class CorruptStateError extends Error {}
+
 function normalizeState(state) {
   if (!state || typeof state !== 'object' || Array.isArray(state)) {
-    throw new Error('El estado guardado no es un objeto valido');
+    throw new CorruptStateError('El estado guardado no es un objeto valido');
   }
-  if (!state.guilds) state.guilds = {};
-  if (!state.tasks) state.tasks = {};
-  if (!state.reports) state.reports = [];
-  if (!state.pendingEvidence) state.pendingEvidence = {};
-  if (!state.pendingPlantation) state.pendingPlantation = {};
+  const base = createDefaultState();
+  for (const [key, value] of Object.entries(base)) {
+    if (!state[key]) state[key] = value;
+  }
   return state;
 }
 
+// Solo estos errores significan "el contenido esta dañado". Un fallo de E/S
+// (archivo bloqueado, permisos) NO es corrupcion y no debe tocar nada.
+function isCorruptionError(error) {
+  return error instanceof SyntaxError || error instanceof CorruptStateError;
+}
+
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+// Los bloqueos de archivo en Windows (antivirus, indexador) suelen durar
+// milisegundos: reintentamos antes de dar el fallo por definitivo.
+function readFileWithRetry(file) {
+  let lastError;
+  for (let attempt = 0; attempt < READ_ATTEMPTS; attempt++) {
+    try {
+      return fs.readFileSync(file, 'utf8');
+    } catch (error) {
+      if (error.code === 'ENOENT') throw error;
+      lastError = error;
+      sleepSync(READ_RETRY_MS);
+    }
+  }
+  throw lastError;
+}
+
 // Devuelve el estado del archivo, o null si no existe / esta vacio.
-// Lanza si el contenido existe pero esta corrupto.
+// Lanza CorruptStateError o SyntaxError si el contenido esta dañado,
+// y el error de E/S original si no se pudo leer.
 function readCandidate(file) {
   if (!fs.existsSync(file)) return null;
-  const raw = fs.readFileSync(file, 'utf8');
+  const raw = readFileWithRetry(file);
   if (!raw.trim()) return null;
   return normalizeState(JSON.parse(raw));
 }
 
-function quarantineFile(file) {
+function quarantineFile(file, tag) {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const target = path.join(DATA_DIR, `state.corrupto-${stamp}.json`);
+  const target = path.join(DATA_DIR, `state.corrupto-${tag}-${stamp}.json`);
   try {
     fs.renameSync(file, target);
     return target;
@@ -65,27 +100,50 @@ function describeState(state) {
   return `${guilds} servidor(es), ${reports} reporte(s)`;
 }
 
+// Lee el respaldo. Si esta dañado lo aparta, porque si no el siguiente
+// refreshBackup lo sobrescribe y perdemos la ultima copia recuperable.
+function readBackupOrQuarantine() {
+  try {
+    return readCandidate(BACKUP_FILE);
+  } catch (error) {
+    if (isCorruptionError(error)) {
+      const moved = quarantineFile(BACKUP_FILE, 'respaldo');
+      console.error(
+        `[DATOS] El respaldo tambien esta dañado: ${error.message}` +
+        (moved ? ` (conservado en ${moved})` : '')
+      );
+    } else {
+      console.error(`[DATOS] No se pudo leer el respaldo: ${error.message}`);
+    }
+    return null;
+  }
+}
+
 function readState() {
   ensureDataDir();
 
+  let mainState = null;
   try {
-    const state = readCandidate(STATE_FILE);
-    if (state) return state;
+    mainState = readCandidate(STATE_FILE);
   } catch (error) {
-    // El archivo principal esta corrupto. NUNCA lo descartamos en silencio:
-    // primero intentamos el respaldo, y el corrupto se conserva para revisarlo.
-    console.error(`[DATOS] state.json esta corrupto: ${error.message}`);
-
-    let backup = null;
-    try {
-      backup = readCandidate(BACKUP_FILE);
-    } catch (backupError) {
-      console.error(`[DATOS] El respaldo tambien esta corrupto: ${backupError.message}`);
+    if (!isCorruptionError(error)) {
+      // Fallo de E/S, no corrupcion. Preferimos fallar de forma ruidosa antes
+      // que devolver un estado vacio que la siguiente escritura haria permanente.
+      console.error(
+        `[DATOS] No se pudo leer state.json tras ${READ_ATTEMPTS} intentos ` +
+        `(${error.code || error.message}). No se modifica ningun archivo.`
+      );
+      throw error;
     }
 
-    const quarantined = quarantineFile(STATE_FILE);
+    // Corrupcion real: intentamos el respaldo y conservamos el archivo dañado.
+    console.error(`[DATOS] state.json esta corrupto: ${error.message}`);
+    const backup = readBackupOrQuarantine();
+    const quarantined = quarantineFile(STATE_FILE, 'principal');
     if (quarantined) {
       console.error(`[DATOS] Archivo corrupto conservado en: ${quarantined}`);
+    } else {
+      console.error('[DATOS] No se pudo apartar el archivo corrupto (¿bloqueado?).');
     }
 
     if (backup) {
@@ -94,32 +152,43 @@ function readState() {
     }
 
     console.error('[DATOS] No habia respaldo utilizable. Se arranca con datos vacios.');
-    return { ...defaultState };
+    return createDefaultState();
   }
 
-  // El principal no existe o esta vacio: puede ser instalacion nueva o un borrado.
-  try {
-    const backup = readCandidate(BACKUP_FILE);
-    if (backup) {
-      console.warn(
-        `[DATOS] state.json no existe o esta vacio. Restaurado desde el respaldo (${describeState(backup)}).`
-      );
-      return backup;
-    }
-  } catch (error) {
-    console.error(`[DATOS] El respaldo esta corrupto: ${error.message}`);
+  if (mainState) return mainState;
+
+  // El principal no existe o esta vacio: instalacion nueva o borrado.
+  const backup = readBackupOrQuarantine();
+  if (backup) {
+    console.warn(
+      `[DATOS] state.json no existe o esta vacio. Restaurado desde el respaldo (${describeState(backup)}).`
+    );
+    return backup;
   }
 
-  return { ...defaultState };
+  return createDefaultState();
 }
 
 let lastBackupAt = 0;
 
+// Respalda la version en disco solo si es valida, y de forma atomica.
 function refreshBackup() {
-  if (!fs.existsSync(STATE_FILE)) return;
   if (Date.now() - lastBackupAt < BACKUP_MIN_INTERVAL_MS) return;
+
+  let current;
   try {
-    fs.copyFileSync(STATE_FILE, BACKUP_FILE);
+    current = readCandidate(STATE_FILE);
+  } catch (error) {
+    console.error(
+      `[DATOS] No se actualiza el respaldo: state.json no es legible o valido (${error.message}).`
+    );
+    return;
+  }
+  if (!current) return;
+
+  try {
+    fs.writeFileSync(BACKUP_TMP_FILE, JSON.stringify(current, null, 2), 'utf8');
+    fs.renameSync(BACKUP_TMP_FILE, BACKUP_FILE);
     lastBackupAt = Date.now();
   } catch (error) {
     console.error(`[DATOS] No se pudo actualizar el respaldo: ${error.message}`);
