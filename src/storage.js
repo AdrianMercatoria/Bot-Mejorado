@@ -28,7 +28,9 @@ function createDefaultState() {
     tasks: {},
     reports: [],
     pendingEvidence: {},
-    pendingPlantation: {}
+    pendingPlantation: {},
+    // CDs sueltos creados con /cd desde cualquier canal.
+    timers: []
   };
 }
 

@@ -125,6 +125,29 @@ El panel de RUNS muestra cuántos usuarios únicos han iniciado RUNS desde que s
 - **Ramas**: eliges `Ramas`, escribes cantidad de semillas, inicia ciclo 1/2 (3h por defecto por ciclo), marcas cada ciclo, y al completar 2/2 aparece opcion para agregar un ciclo extra o finalizar.
 - **Duplicado**: eliges `Duplicado`, escribes cantidad de semillas y haces un ciclo unico de 3h para finalizar.
 
+## CD personales con aviso por MD
+
+Cualquier usuario puede crear un CD desde cualquier canal y el bot le avisa **por mensaje privado** cuando termina.
+
+```
+/cd tiempo:2h nombre:Cambio de turno
+```
+
+- **tiempo** (obligatorio): `2h`, `45m`, `1h30m`, `2d`, `90s`. Un numero suelto son minutos (`90` = 90 minutos). Minimo 30 segundos, maximo 30 dias.
+- **nombre** (opcional): aparece en el aviso. Si no lo pones, se llama "CD".
+
+La confirmacion es privada, asi que no ensucia el canal. Al terminar, el bot manda un MD a quien lo creo. **Si tiene los MD cerrados**, lo menciona en el canal donde lo creo para que no se pierda el aviso.
+
+### Ver y cancelar
+```
+/cds
+```
+Lista tus CD activos con el tiempo restante y un boton para cancelar cada uno. Cada usuario ve y cancela **solo los suyos**: los de los demas ni aparecen ni se pueden tocar.
+
+Limite de 20 CD activos por usuario. Los CD se guardan en la base de datos, asi que sobreviven a un reinicio del bot; si alguno vence mientras el bot esta apagado, el aviso sale en cuanto vuelve.
+
+> No confundir con `/config_cd`, que cambia el cooldown fijo de las misiones (Maritimo, Terrestre, RUNS, Plantacion) para todo el servidor.
+
 ## Conteo automatico de dinero por fotos
 
 El bot lee las capturas que los usuarios publican en un canal y reporta en otro canal quien envio y cuanto.

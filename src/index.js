@@ -17,7 +17,7 @@ const {
   ChannelSelectMenuBuilder
 } = require('discord.js');
 const { readState, writeState, getStorageInfo } = require('./storage');
-const { addHours, formatDuration } = require('./time');
+const { addHours, formatDuration, formatLongDuration, parseDuration } = require('./time');
 const { readAmountFromUrl, formatAmount } = require('./ocr');
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
@@ -83,6 +83,24 @@ const commands = [
         .addChannelTypes(ChannelType.GuildText)
         .setRequired(true)
     ),
+  new SlashCommandBuilder()
+    .setName('cd')
+    .setDescription('Crea un CD personal: te avisa por MD cuando termine')
+    .addStringOption((opt) =>
+      opt
+        .setName('tiempo')
+        .setDescription('Duracion: 2h, 45m, 1h30m, 2d. Un numero suelto son minutos.')
+        .setRequired(true)
+    )
+    .addStringOption((opt) =>
+      opt
+        .setName('nombre')
+        .setDescription('Para que es el CD (aparece en el aviso)')
+        .setMaxLength(100)
+    ),
+  new SlashCommandBuilder()
+    .setName('cds')
+    .setDescription('Muestra tus CD activos y te deja cancelarlos'),
   new SlashCommandBuilder()
     .setName('config_dinero')
     .setDescription('Configura el conteo automatico de dinero por fotos (solo administradores)')
@@ -454,6 +472,108 @@ function buildAdminPanelPayload(guildConfig) {
 
 // Panel para asignar los canales del conteo de dinero desde el Main,
 // sin tener que recordar la sintaxis de ningun comando.
+const MAX_TIMERS_PER_USER = 20;
+const TIMER_LIST_LIMIT = 10;
+
+function ensureTimers(state) {
+  if (!Array.isArray(state.timers)) state.timers = [];
+  return state.timers;
+}
+
+function getUserTimers(state, guildId, userId) {
+  return ensureTimers(state)
+    .filter((t) => t.guildId === guildId && t.userId === userId)
+    .sort((a, b) => a.endsAt - b.endsAt);
+}
+
+// Lista de CDs del usuario con un boton de cancelar por cada uno.
+function buildTimerListPayload(state, guildId, userId) {
+  const timers = getUserTimers(state, guildId, userId);
+
+  if (!timers.length) {
+    return {
+      content: 'No tienes ningun CD activo.\nCrea uno con `/cd tiempo:2h nombre:Lo que sea`.',
+      components: [],
+      ephemeral: true
+    };
+  }
+
+  const shown = timers.slice(0, TIMER_LIST_LIMIT);
+  const lines = [`### Tus CD activos (${timers.length})`];
+  shown.forEach((t, i) => {
+    const secs = Math.floor(t.endsAt / 1000);
+    lines.push(`**${i + 1}.** ${t.label} — termina <t:${secs}:R> (<t:${secs}:t>)`);
+  });
+  if (timers.length > shown.length) {
+    lines.push(`_... y ${timers.length - shown.length} mas. Cancela alguno para ver el resto._`);
+  }
+
+  const rows = [];
+  for (let i = 0; i < shown.length; i += 5) {
+    rows.push(
+      new ActionRowBuilder().addComponents(
+        shown.slice(i, i + 5).map((t, j) =>
+          new ButtonBuilder()
+            .setCustomId(`cd:cancel:${t.id}`)
+            .setLabel(`Cancelar ${i + j + 1}`)
+            .setStyle(ButtonStyle.Danger)
+        )
+      )
+    );
+  }
+
+  return { content: lines.join('\n'), components: rows, ephemeral: true };
+}
+
+// Aviso al terminar: por MD, que es lo pedido. Si el usuario tiene los MD
+// cerrados, se le menciona en el canal donde lo creo para que no se pierda.
+async function notifyTimerFinished(timer) {
+  const guild = await client.guilds.fetch(timer.guildId).catch(() => null);
+  const where = guild ? ` en **${guild.name}**` : '';
+  const text =
+    `⏰ Tu CD **${timer.label}**${where} ha terminado.\n` +
+    `Lo creaste <t:${Math.floor(timer.createdAt / 1000)}:R>.`;
+
+  const user = await client.users.fetch(timer.userId).catch(() => null);
+  if (user) {
+    const sent = await user.send(text).catch(() => null);
+    if (sent) return 'dm';
+  }
+
+  if (guild && timer.channelId) {
+    const channel = await guild.channels.fetch(timer.channelId).catch(() => null);
+    if (channel && channel.type === ChannelType.GuildText) {
+      const posted = await channel
+        .send({
+          content: `⏰ <@${timer.userId}> tu CD **${timer.label}** ha terminado.\n_(no pude enviarte MD)_`,
+          allowedMentions: { users: [timer.userId] }
+        })
+        .catch(() => null);
+      if (posted) return 'canal';
+    }
+  }
+
+  return 'fallido';
+}
+
+// Devuelve true si hubo cambios que guardar.
+async function processTimers(state) {
+  const timers = ensureTimers(state);
+  const now = Date.now();
+  const due = timers.filter((t) => t.endsAt <= now);
+  if (!due.length) return false;
+
+  state.timers = timers.filter((t) => t.endsAt > now);
+
+  for (const timer of due) {
+    const via = await notifyTimerFinished(timer);
+    if (via === 'fallido') {
+      console.error(`[cd] No se pudo avisar a ${timer.userId} del CD "${timer.label}".`);
+    }
+  }
+  return true;
+}
+
 function buildMoneyChannelPayload(guildConfig) {
   const read = guildConfig.moneyReadChannelId;
   const report = guildConfig.moneyReportChannelId;
@@ -1768,6 +1888,10 @@ async function schedulerTick() {
   let changed = false;
   const now = Date.now();
 
+  // Los CD de /cd son independientes de la configuracion del servidor:
+  // se procesan aunque el guild no tenga paneles ni canales asignados.
+  if (await processTimers(state)) changed = true;
+
   for (const [guildId, guildConfig] of Object.entries(state.guilds)) {
     const guild = await client.guilds.fetch(guildId).catch(() => null);
     if (!guild) continue;
@@ -2207,6 +2331,54 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
+    if (interaction.commandName === 'cd') {
+      const parsed = parseDuration(interaction.options.getString('tiempo', true));
+      if (parsed.error) {
+        await interaction.reply({ content: parsed.error, ephemeral: true });
+        return;
+      }
+
+      const mine = getUserTimers(state, interaction.guildId, interaction.user.id);
+      if (mine.length >= MAX_TIMERS_PER_USER) {
+        await interaction.reply({
+          content:
+            `Ya tienes ${mine.length} CD activos, que es el maximo.\n` +
+            'Cancela alguno con `/cds` antes de crear otro.',
+          ephemeral: true
+        });
+        return;
+      }
+
+      const label = (interaction.options.getString('nombre') || 'CD').trim() || 'CD';
+      const endsAt = Date.now() + parsed.ms;
+
+      ensureTimers(state).push({
+        id: `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+        guildId: interaction.guildId,
+        channelId: interaction.channelId,
+        userId: interaction.user.id,
+        label,
+        createdAt: Date.now(),
+        endsAt
+      });
+      writeState(state);
+
+      const secs = Math.floor(endsAt / 1000);
+      await interaction.reply({
+        content:
+          `⏳ CD **${label}** creado: ${formatLongDuration(parsed.ms)}.\n` +
+          `Termina <t:${secs}:R> (<t:${secs}:f>) y te avisare por MD.\n` +
+          '_Con `/cds` puedes verlo o cancelarlo._',
+        ephemeral: true
+      });
+      return;
+    }
+
+    if (interaction.commandName === 'cds') {
+      await interaction.reply(buildTimerListPayload(state, interaction.guildId, interaction.user.id));
+      return;
+    }
+
     if (interaction.commandName === 'config_dinero') {
       if (!isAdmin(interaction)) {
         await interaction.reply({
@@ -2437,6 +2609,36 @@ client.on(Events.InteractionCreate, async (interaction) => {
         content: buildStatsText(state, interaction.guildId, range),
         components: buildStatsComponents(range)
       });
+      return;
+    }
+
+    if (interaction.customId.startsWith('cd:cancel:')) {
+      const timerId = interaction.customId.slice('cd:cancel:'.length);
+      const timers = ensureTimers(state);
+      const timer = timers.find((t) => t.id === timerId);
+
+      if (!timer) {
+        await interaction.update(
+          buildTimerListPayload(state, interaction.guildId, interaction.user.id)
+        );
+        return;
+      }
+
+      // Cada uno solo cancela los suyos.
+      if (timer.userId !== interaction.user.id) {
+        await interaction.reply({
+          content: '⛔ Ese CD no es tuyo.',
+          ephemeral: true
+        });
+        return;
+      }
+
+      state.timers = timers.filter((t) => t.id !== timerId);
+      writeState(state);
+
+      const payload = buildTimerListPayload(state, interaction.guildId, interaction.user.id);
+      payload.content = `🗑️ CD **${timer.label}** cancelado.\n\n${payload.content}`;
+      await interaction.update(payload);
       return;
     }
 
