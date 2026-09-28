@@ -1182,7 +1182,9 @@ async function publishMissionPanel(guild, guildConfig, taskKey, options = {}) {
   };
 }
 
-async function publishAdminPanel(guild, guildConfig) {
+// options.ensureLast: si hay mensajes mas nuevos, borra el panel y lo publica
+// de nuevo al final. Si ya es el ultimo, no lo toca (se llama cada 30s).
+async function publishAdminPanel(guild, guildConfig, options = {}) {
   const channelId = guildConfig.mainChannelId;
   if (!channelId) return null;
 
@@ -1196,7 +1198,14 @@ async function publishAdminPanel(guild, guildConfig) {
   if (previousRef?.messageId && previousRef.channelId === channel.id) {
     const previousMessage = await channel.messages.fetch(previousRef.messageId).catch(() => null);
     if (previousMessage) {
-      panelMessage = await previousMessage.edit(payload).catch(() => null);
+      if (options.ensureLast) {
+        const newer = await channel.messages.fetch({ after: previousMessage.id, limit: 1 }).catch(() => null);
+        if (!newer) return previousMessage;
+        if (newer.size === 0) return previousMessage;
+        await previousMessage.delete().catch(() => null);
+      } else {
+        panelMessage = await previousMessage.edit(payload).catch(() => null);
+      }
     }
   }
 
@@ -2153,6 +2162,7 @@ async function schedulerTick() {
     await refreshMTPanel(guild, guildConfig);
     await refreshRunsPanel(guild, guildConfig);
     await refreshPlantationPanel(guild, guildConfig);
+    if (await publishAdminPanel(guild, guildConfig, { ensureLast: true })) changed = true;
 
     // Process MT cooldown expirations
     const activeMts = [];

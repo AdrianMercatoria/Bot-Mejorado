@@ -105,7 +105,7 @@ En el mismo panel:
 Configura el conteo automático de dinero leyendo las fotos que envían los usuarios. Ver [Conteo automatico de dinero por fotos](#conteo-automatico-de-dinero-por-fotos).
 
 ### Paneles siempre como último mensaje
-Los paneles de misión (MT, RUNS, Plantacion) se reposicionan automáticamente al final del canal si hay mensajes más recientes. El scheduler los verifica cada 30 segundos.
+Los paneles de misión (MT, RUNS, Plantacion) y el Panel de Administración del Main se reposicionan automáticamente al final del canal si hay mensajes más recientes. El scheduler los verifica cada 30 segundos.
 
 ### Comando `/config_cd`
 Permite a administradores cambiar el cooldown de cualquier tarea:
