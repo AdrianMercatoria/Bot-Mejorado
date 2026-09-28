@@ -19,6 +19,15 @@ const {
 const { readState, writeState, getStorageInfo } = require('./storage');
 const { addHours, formatDuration, formatLongDuration, parseDuration } = require('./time');
 const { readAmountFromUrl, formatAmount } = require('./ocr');
+const {
+  AUTO_CLEAN_INTERVAL_MS,
+  ensureModerationState,
+  parseWordList,
+  mergeWords,
+  findBannedWord,
+  collectWordsFromChannel,
+  cleanChannelCompletely
+} = require('./moderation');
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
@@ -51,7 +60,9 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent
   ],
-  partials: [Partials.Channel]
+  // Message: para enterarnos de ediciones/borrados en el canal de palabras
+  // aunque el mensaje no este en cache (por ejemplo, tras reiniciar el bot).
+  partials: [Partials.Channel, Partials.Message]
 });
 
 const commands = [
@@ -278,6 +289,7 @@ function getGuildState(state, guildId) {
   }
 
   ensureGuildPanelState(state.guilds[guildId]);
+  ensureModerationState(state.guilds[guildId]);
 
   return state.guilds[guildId];
 }
@@ -449,7 +461,11 @@ function buildAdminPanelButtons(guildConfig) {
       new ButtonBuilder()
         .setCustomId('main:vender-toggle')
         .setLabel(venderActive ? '⛔ Detener Vender' : '▶️ Iniciar Vender')
-        .setStyle(venderActive ? ButtonStyle.Danger : ButtonStyle.Success)
+        .setStyle(venderActive ? ButtonStyle.Danger : ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId('main:moderacion')
+        .setLabel('🧹 Limpieza y moderación')
+        .setStyle(ButtonStyle.Primary)
     )
   ];
 }
@@ -621,6 +637,189 @@ function buildMoneyChannelPayload(guildConfig) {
     ],
     ephemeral: true
   };
+}
+
+function formatChannelList(channelIds) {
+  return channelIds.length ? channelIds.map((id) => `<#${id}>`).join(', ') : '_ninguno_';
+}
+
+// Panel de limpieza automatica (cada 12h) y filtro de palabras prohibidas.
+function buildModerationPayload(guildConfig, notice = null) {
+  const mod = ensureModerationState(guildConfig);
+  const cleanIds = Object.keys(mod.autoCleanChannels);
+  const words = mod.bannedWords;
+
+  const lines = [];
+  if (notice) lines.push(notice, '');
+  lines.push('### 🧹 Limpieza automática (cada 12h)');
+  if (cleanIds.length) {
+    for (const id of cleanIds) {
+      const next = mod.autoCleanChannels[id]?.nextCleanAt;
+      lines.push(`- <#${id}> — próxima limpieza ${next ? `<t:${Math.floor(next / 1000)}:R>` : 'pendiente'}`);
+    }
+  } else {
+    lines.push('- _Ningún canal seleccionado_');
+  }
+  lines.push('_Se borran todos los mensajes excepto los paneles del bot y los mensajes fijados._');
+  lines.push('');
+  lines.push('### 🚫 Moderación de palabras');
+  lines.push(`- **Canales moderados**: ${formatChannelList(mod.watchChannelIds)}`);
+  lines.push(`- **Canal con la lista de palabras**: ${formatAssignedChannel(mod.wordsChannelId)}`);
+  if (words.length) {
+    const preview = words.slice(0, 30).map((w) => `\`${w}\``).join(', ');
+    lines.push(`- **Palabras prohibidas (${words.length})**: ${preview}${words.length > 30 ? ', …' : ''}`);
+  } else {
+    lines.push('- **Palabras prohibidas**: _ninguna todavía_');
+  }
+  lines.push('_Escribe palabras en el canal de lista (una por línea o separadas por comas) y se agregan solas. ' +
+    'Cualquier mensaje con una de ellas en un canal moderado se borra entero._');
+
+  const cleanMenu = new ChannelSelectMenuBuilder()
+    .setCustomId('mod:clean')
+    .setPlaceholder('🧹 Canales a limpiar cada 12h')
+    .addChannelTypes(ChannelType.GuildText)
+    .setMinValues(0)
+    .setMaxValues(25);
+  if (cleanIds.length) cleanMenu.setDefaultChannels(...cleanIds.slice(0, 25));
+
+  const watchMenu = new ChannelSelectMenuBuilder()
+    .setCustomId('mod:watch')
+    .setPlaceholder('🚫 Canales donde se prohíben las palabras')
+    .addChannelTypes(ChannelType.GuildText)
+    .setMinValues(0)
+    .setMaxValues(25);
+  if (mod.watchChannelIds.length) watchMenu.setDefaultChannels(...mod.watchChannelIds.slice(0, 25));
+
+  const wordsMenu = new ChannelSelectMenuBuilder()
+    .setCustomId('mod:words')
+    .setPlaceholder('📝 Canal donde se escribe la lista de palabras')
+    .addChannelTypes(ChannelType.GuildText)
+    .setMinValues(0)
+    .setMaxValues(1);
+  if (mod.wordsChannelId) wordsMenu.setDefaultChannels(mod.wordsChannelId);
+
+  return {
+    content: truncateForDiscord(lines.join('\n')),
+    components: [
+      new ActionRowBuilder().addComponents(cleanMenu),
+      new ActionRowBuilder().addComponents(watchMenu),
+      new ActionRowBuilder().addComponents(wordsMenu),
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('mod:clean-now')
+          .setLabel('Limpiar ahora')
+          .setStyle(ButtonStyle.Danger)
+          .setDisabled(!cleanIds.length),
+        new ButtonBuilder()
+          .setCustomId('mod:sync-words')
+          .setLabel('Recargar lista de palabras')
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(!mod.wordsChannelId)
+      )
+    ],
+    ephemeral: true
+  };
+}
+
+// Canales que se estan limpiando ahora mismo, para no lanzar dos limpiezas a la vez.
+const cleaningChannels = new Set();
+
+// Ids de los paneles del bot, que la limpieza nunca debe borrar.
+function getProtectedMessageIds(guildConfig) {
+  const ids = new Set();
+  for (const ref of Object.values(guildConfig.missionPanels || {})) {
+    if (ref?.messageId) ids.add(ref.messageId);
+  }
+  if (guildConfig.adminPanelRef?.messageId) ids.add(guildConfig.adminPanelRef.messageId);
+  return ids;
+}
+
+// No se espera el resultado: borrar mensajes de mas de 14 dias va de uno en uno
+// y puede tardar minutos. No toca el estado guardado.
+function startAutoClean(guild, guildConfig, channelId) {
+  if (cleaningChannels.has(channelId)) return false;
+  if (channelId === guildConfig.moderation?.wordsChannelId) {
+    console.warn(`[auto-clean] guildId=${guild.id} canal=${channelId} es el canal de palabras, se omite`);
+    return false;
+  }
+  cleaningChannels.add(channelId);
+  const keepIds = getProtectedMessageIds(guildConfig);
+
+  (async () => {
+    const channel = await guild.channels.fetch(channelId).catch(() => null);
+    if (!channel || channel.type !== ChannelType.GuildText) {
+      console.warn(`[auto-clean] guildId=${guild.id} canal=${channelId} no accesible`);
+      return;
+    }
+    const { deleted, failed } = await cleanChannelCompletely(channel, keepIds);
+    console.log(`[auto-clean] guildId=${guild.id} canal=${channelId} eliminados=${deleted} fallidos=${failed}`);
+  })()
+    .catch((error) => console.error(`[auto-clean] canal=${channelId}:`, error))
+    .finally(() => cleaningChannels.delete(channelId));
+
+  return true;
+}
+
+async function syncBannedWords(guild, guildConfig) {
+  const mod = ensureModerationState(guildConfig);
+  if (!mod.wordsChannelId) return { ok: false, error: 'No hay canal de palabras asignado' };
+  const channel = await guild.channels.fetch(mod.wordsChannelId).catch(() => null);
+  if (!channel || channel.type !== ChannelType.GuildText) {
+    return { ok: false, error: 'No se puede acceder al canal de palabras' };
+  }
+  try {
+    mod.bannedWords = await collectWordsFromChannel(channel);
+  } catch (error) {
+    return { ok: false, error: `No se pudo leer el canal de palabras: ${error.message}` };
+  }
+  return { ok: true, count: mod.bannedWords.length };
+}
+
+// Vuelve a leer el canal de palabras tras una edicion o borrado.
+async function resyncWordsIfNeeded(message) {
+  if (!message.guildId) return;
+  const state = ensureRuntimeState(readState());
+  const guildConfig = getGuildState(state, message.guildId);
+  const wordsChannelId = guildConfig.moderation.wordsChannelId;
+  if (!wordsChannelId || message.channelId !== wordsChannelId) return;
+  const guild = message.guild || (await client.guilds.fetch(message.guildId).catch(() => null));
+  if (!guild) return;
+  const result = await syncBannedWords(guild, guildConfig);
+  if (!result.ok) return;
+
+  // Releemos para no pisar cambios hechos mientras se leia el canal.
+  const fresh = ensureRuntimeState(readState());
+  const freshMod = getGuildState(fresh, message.guildId).moderation;
+  if (freshMod.wordsChannelId !== wordsChannelId) return;
+  freshMod.bannedWords = guildConfig.moderation.bannedWords;
+  writeState(fresh);
+  console.log(`[moderacion] guildId=${message.guildId} lista de palabras recargada (${result.count})`);
+}
+
+// Borra el mensaje entero si contiene una palabra prohibida. Devuelve true si lo borro.
+async function enforceBannedWords(message, guildConfig) {
+  const mod = guildConfig.moderation;
+  if (!mod.watchChannelIds.includes(message.channelId)) return false;
+  if (message.channelId === mod.wordsChannelId) return false;
+
+  const word = findBannedWord(message.content, mod.bannedWords);
+  if (!word) return false;
+
+  const removed = await message.delete().catch((error) => {
+    console.error(`[moderacion] No se pudo borrar mensaje en canal=${message.channelId}: ${error.message}`);
+    return null;
+  });
+  if (!removed) return false;
+
+  console.log(`[moderacion] guildId=${message.guildId} canal=${message.channelId} usuario=${message.author?.id} palabra="${word}"`);
+  const notice = await message.channel
+    .send({
+      content: `🚫 ${message.author}, tu mensaje fue eliminado por contener una palabra prohibida.`,
+      allowedMentions: { users: [message.author.id] }
+    })
+    .catch(() => null);
+  if (notice) setTimeout(() => notice.delete().catch(() => null), 10 * 1000);
+  return true;
 }
 
 function getTaskChannelId(guildConfig, taskKey) {
@@ -1898,6 +2097,14 @@ async function schedulerTick() {
 
     const tasks = ensureTaskContainer(state, guildId);
 
+    // Limpieza automatica cada 12h de los canales elegidos en el Main.
+    for (const [channelId, entry] of Object.entries(guildConfig.moderation.autoCleanChannels)) {
+      if (entry?.nextCleanAt && now < entry.nextCleanAt) continue;
+      startAutoClean(guild, guildConfig, channelId);
+      guildConfig.moderation.autoCleanChannels[channelId] = { nextCleanAt: now + AUTO_CLEAN_INTERVAL_MS };
+      changed = true;
+    }
+
     // Auto-close RUNS after 1 hour
     if (
       guildConfig.runs.status === 'in_progress' &&
@@ -2128,6 +2335,20 @@ client.on(Events.MessageCreate, async (message) => {
   const state = ensureRuntimeState(readState());
   const guildConfig = getGuildState(state, message.guildId);
 
+  // Canal de la lista de palabras: cada mensaje agrega palabras prohibidas.
+  if (guildConfig.moderation.wordsChannelId && message.channelId === guildConfig.moderation.wordsChannelId) {
+    const { words, added } = mergeWords(guildConfig.moderation.bannedWords, parseWordList(message.content));
+    if (added > 0) {
+      guildConfig.moderation.bannedWords = words;
+      writeState(state);
+      console.log(`[moderacion] guildId=${message.guildId} ${added} palabra(s) agregada(s), total=${words.length}`);
+    }
+    await message.react(added > 0 ? '✅' : '➖').catch(() => null);
+    return;
+  }
+
+  if (await enforceBannedWords(message, guildConfig)) return;
+
   if (
     guildConfig.moneyReadChannelId &&
     message.channelId === guildConfig.moneyReadChannelId &&
@@ -2256,6 +2477,33 @@ client.on(Events.MessageCreate, async (message) => {
     );
     return;
   }
+});
+
+// Un mensaje editado para incluir una palabra prohibida tambien se borra.
+client.on(Events.MessageUpdate, async (_oldMessage, newMessage) => {
+  try {
+    if (!newMessage.guildId) return;
+    const message = newMessage.partial ? await newMessage.fetch().catch(() => null) : newMessage;
+    if (!message || message.author?.bot) return;
+
+    const state = ensureRuntimeState(readState());
+    const guildConfig = getGuildState(state, message.guildId);
+    if (message.channelId === guildConfig.moderation.wordsChannelId) {
+      await resyncWordsIfNeeded(message);
+      return;
+    }
+    await enforceBannedWords(message, guildConfig);
+  } catch (error) {
+    console.error('[moderacion] Error al procesar edicion:', error);
+  }
+});
+
+// Borrar un mensaje del canal de palabras quita esas palabras de la lista.
+client.on(Events.MessageDelete, async (message) => {
+  if (message.author?.bot) return;
+  await resyncWordsIfNeeded(message).catch((error) =>
+    console.error('[moderacion] Error al recargar palabras:', error)
+  );
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
@@ -2531,6 +2779,63 @@ client.on(Events.InteractionCreate, async (interaction) => {
     return;
   }
 
+  if (interaction.isChannelSelectMenu() && interaction.customId.startsWith('mod:')) {
+    if (!isAdmin(interaction)) {
+      await interaction.reply({ content: '⛔ Solo administradores pueden cambiar estos canales.', ephemeral: true });
+      return;
+    }
+
+    const mod = guildConfig.moderation;
+    const target = interaction.customId.split(':')[1];
+    const values = interaction.values;
+
+    if (target === 'clean') {
+      const nextCleanAt = Date.now() + AUTO_CLEAN_INTERVAL_MS;
+      const updated = {};
+      let notice = null;
+      for (const id of values) {
+        if (id === mod.wordsChannelId) {
+          notice = '⚠️ El canal de la lista de palabras no se puede limpiar automáticamente; se omitió.';
+          continue;
+        }
+        updated[id] = mod.autoCleanChannels[id] || { nextCleanAt };
+      }
+      mod.autoCleanChannels = updated;
+      writeState(state);
+      await interaction.update(buildModerationPayload(guildConfig, notice));
+      return;
+    }
+
+    if (target === 'watch') {
+      mod.watchChannelIds = [...values];
+      writeState(state);
+      await interaction.update(buildModerationPayload(guildConfig));
+      return;
+    }
+
+    if (target === 'words') {
+      mod.wordsChannelId = values[0] || null;
+      if (!mod.wordsChannelId) {
+        mod.bannedWords = [];
+        writeState(state);
+        await interaction.update(buildModerationPayload(guildConfig, 'Canal de palabras quitado. La lista quedó vacía.'));
+        return;
+      }
+      // Nunca limpiar el canal que guarda la lista.
+      delete mod.autoCleanChannels[mod.wordsChannelId];
+      await interaction.deferUpdate();
+      const result = await syncBannedWords(interaction.guild, guildConfig);
+      writeState(state);
+      await interaction.editReply(
+        buildModerationPayload(
+          guildConfig,
+          result.ok ? `✅ Lista cargada: **${result.count}** palabra(s).` : `⚠️ ${result.error}`
+        )
+      );
+      return;
+    }
+  }
+
   if (!interaction.isButton()) return;
 
   try {
@@ -2651,6 +2956,50 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
       await interaction.reply(buildMoneyChannelPayload(guildConfig));
+      return;
+    }
+
+    if (interaction.customId === 'main:moderacion') {
+      if (!isAdmin(interaction)) {
+        await interaction.reply({ content: '⛔ Solo administradores pueden usar esta accion.', ephemeral: true });
+        return;
+      }
+      await interaction.reply(buildModerationPayload(guildConfig));
+      return;
+    }
+
+    if (interaction.customId === 'mod:clean-now') {
+      if (!isAdmin(interaction)) {
+        await interaction.reply({ content: '⛔ Solo administradores pueden usar esta accion.', ephemeral: true });
+        return;
+      }
+      const nextCleanAt = Date.now() + AUTO_CLEAN_INTERVAL_MS;
+      let started = 0;
+      for (const channelId of Object.keys(guildConfig.moderation.autoCleanChannels)) {
+        if (startAutoClean(interaction.guild, guildConfig, channelId)) started++;
+        guildConfig.moderation.autoCleanChannels[channelId] = { nextCleanAt };
+      }
+      writeState(state);
+      await interaction.update(
+        buildModerationPayload(guildConfig, `🧹 Limpieza iniciada en **${started}** canal(es). El contador de 12h se reinició.`)
+      );
+      return;
+    }
+
+    if (interaction.customId === 'mod:sync-words') {
+      if (!isAdmin(interaction)) {
+        await interaction.reply({ content: '⛔ Solo administradores pueden usar esta accion.', ephemeral: true });
+        return;
+      }
+      await interaction.deferUpdate();
+      const result = await syncBannedWords(interaction.guild, guildConfig);
+      writeState(state);
+      await interaction.editReply(
+        buildModerationPayload(
+          guildConfig,
+          result.ok ? `✅ Lista recargada: **${result.count}** palabra(s).` : `⚠️ ${result.error}`
+        )
+      );
       return;
     }
 
@@ -2900,6 +3249,23 @@ client.once(Events.ClientReady, async (readyClient) => {
       : '\n        [AVISO] Los datos viven dentro de la carpeta del proyecto. Si reemplazas la carpeta al actualizar, se pierden.' +
         '\n                Configura DATA_DIR en tu .env con una ruta fuera del proyecto para evitarlo.')
   );
+
+  // Redibuja el Panel de Administración ya publicado para que muestre los
+  // botones de la version actual del bot sin tener que repetir /setup.
+  try {
+    const state = ensureRuntimeState(readState());
+    for (const [guildId, guildConfig] of Object.entries(state.guilds)) {
+      if (!guildConfig.adminPanelRef && !guildConfig.mainChannelId) continue;
+      const guild = await readyClient.guilds.fetch(guildId).catch(() => null);
+      if (!guild) continue;
+      getGuildState(state, guildId);
+      const panel = await publishAdminPanel(guild, guildConfig);
+      console.log(`[admin-panel] guildId=${guildId} ${panel ? 'actualizado' : 'no se pudo actualizar'}`);
+    }
+    writeState(state);
+  } catch (error) {
+    console.error('[admin-panel] Error al actualizar paneles al arrancar:', error);
+  }
 
   setInterval(() => {
     schedulerTick().catch((err) => console.error('Scheduler error:', err));

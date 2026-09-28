@@ -85,6 +85,21 @@ Publicado automáticamente en el canal Main. Contiene:
 - **Recrear panel MT/RUNS/Plantacion** — Fuerza republicar cada panel
 - **Limpiar canal MT/RUNS/Plantacion** — Elimina mensajes viejos y republica el panel
 - **▶️ Iniciar / ⛔ Detener Vender** — Controla la notificación cíclica de Vender
+- **🧹 Limpieza y moderación** — Limpieza automática cada 12h y filtro de palabras prohibidas (ver abajo)
+
+### Limpieza automática cada 12h
+Botón **🧹 Limpieza y moderación** del Panel de Administración → menú **Canales a limpiar cada 12h** (hasta 25 canales).
+- Cada 12 horas el bot borra **todos** los mensajes de esos canales. Solo se conservan los paneles del bot y los mensajes fijados.
+- La primera limpieza ocurre 12h después de elegir el canal. **Limpiar ahora** la lanza al momento y reinicia el contador.
+- Los mensajes de más de 14 días se borran de uno en uno (limitación de Discord), así que un canal muy antiguo puede tardar varios minutos.
+
+### Moderación de palabras prohibidas
+En el mismo panel:
+- **Canal donde se escribe la lista de palabras**: cada mensaje que escribas ahí agrega palabras (una por línea, o separadas por comas o punto y coma). El bot reacciona ✅ al agregarlas. Editar o borrar un mensaje de ese canal actualiza la lista.
+- **Canales donde se prohíben las palabras**: si un mensaje contiene alguna palabra de la lista, se borra **el mensaje entero** y el bot avisa al autor (el aviso se borra a los 10 s). También aplica a mensajes editados.
+- Se comparan palabras completas, sin distinguir mayúsculas ni acentos: `pelicula` bloquea "Película", pero `sal` no bloquea "salir".
+- El canal de la lista nunca se modera ni se limpia automáticamente.
+- El bot necesita el permiso **Gestionar mensajes** en los canales moderados y en los que limpia.
 
 ### Comando `/config_dinero`
 Configura el conteo automático de dinero leyendo las fotos que envían los usuarios. Ver [Conteo automatico de dinero por fotos](#conteo-automatico-de-dinero-por-fotos).
