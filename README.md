@@ -65,13 +65,11 @@ Bot para gestionar tareas de:
 4. Todos los reportes y notificaciones se enviaran por defecto al canal donde se ejecuto `/setup`.
 5. Si quieres enviar cada tarea a canales distintos, usa:
    - `/asignar_canal tarea:Maritimo/Terrestre canal:#canal`
-   - `/asignar_canal tarea:Aereo canal:#canal`
    - `/asignar_canal tarea:RUNS canal:#canal`
    - `/asignar_canal tarea:Plantacion canal:#canal`
 
 ## Flujo Rapido
-- **Maritimo/Terrestre**: Seleccionas una opcion (Maritimo 24h, Terrestre 8h por defecto), subes evidencia (foto) y el bot valida automaticamente la mision. CD configurable con `/config_cd`.
-- **Aereo**: Panel propio en su canal (`/asignar_canal tarea:Aereo`). Mismo flujo que Maritimo/Terrestre: pulsas el boton, subes la foto y entra en CD (12h por defecto). Si aun no tiene canal, sus avisos van al de Maritimo/Terrestre.
+- **Maritimo/Terrestre/Aereo**: Seleccionas una opcion (Maritimo 24h, Terrestre 8h, Aereo 12h por defecto), subes evidencia (foto) y el bot valida automaticamente la mision. CD configurable con `/config_cd`.
 - **RUNS**: Panel simplificado con solo **Iniciar** y **Terminar**. Al terminar entra a CD (4h por defecto) y luego notifica disponibilidad. Auto-cierre a 1 hora si no se termina manualmente.
 - **Plantacion**: Panel con botones `Ramas` y `Duplicado`.
 - **Vender (Bolsa y Porro)**: Notificación cíclica a @everyone cada 40 minutos. El mensaje se borra automaticamente a los 10 minutos. Se controla desde el Panel de Administración.

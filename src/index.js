@@ -82,7 +82,6 @@ const commands = [
         .setRequired(true)
         .addChoices(
           { name: 'Maritimo/Terrestre', value: 'maritimo_terrestre' },
-          { name: 'Aereo', value: 'aereo' },
           { name: 'RUNS', value: 'runs' },
           { name: 'Plantacion', value: 'plantacion' },
           { name: 'Vender (Bolsa y Porro)', value: 'vender' }
@@ -185,11 +184,6 @@ const TASK_SETTINGS = {
     panelField: 'maritimeTerrestrialPanelMessageId',
     label: 'Marítimo/Terrestre'
   },
-  aereo: {
-    channelField: 'aereoChannelId',
-    panelField: 'aereoPanelMessageId',
-    label: 'Aéreo'
-  },
   runs: {
     channelField: 'runsChannelId',
     panelField: 'runsPanelMessageId',
@@ -211,7 +205,6 @@ const TASK_ALIASES = {
   maritimo_terrestre: 'maritimo_terrestre',
   'maritimo-terrestre': 'maritimo_terrestre',
   maritime_terrestrial: 'maritimo_terrestre',
-  aereo: 'aereo',
   runs: 'runs',
   plantacion: 'plantacion',
   plantation: 'plantacion',
@@ -385,6 +378,7 @@ function isAdmin(interaction) {
 function buildMainTaskButtons(guildConfig) {
   const maritimoHours = getCustomCooldown(guildConfig, 'maritimo');
   const terrestreHours = getCustomCooldown(guildConfig, 'terrestre');
+  const aereoHours = getCustomCooldown(guildConfig, 'aereo');
   return [
     new ActionRowBuilder().addComponents(
       new ButtonBuilder()
@@ -394,7 +388,11 @@ function buildMainTaskButtons(guildConfig) {
       new ButtonBuilder()
         .setCustomId(`mt:terrestre:${terrestreHours}`)
         .setLabel(`Terrestre (${terrestreHours}h)`)
-        .setStyle(ButtonStyle.Success)
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId(`mt:aereo:${aereoHours}`)
+        .setLabel(`Aereo (${aereoHours}h)`)
+        .setStyle(ButtonStyle.Secondary)
     )
   ];
 }
@@ -450,10 +448,6 @@ function buildAdminPanelButtons(guildConfig) {
         .setLabel('Recrear panel MT')
         .setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
-        .setCustomId('main:regen-panel:aereo')
-        .setLabel('Recrear panel Aereo')
-        .setStyle(ButtonStyle.Primary),
-      new ButtonBuilder()
         .setCustomId('main:regen-panel:runs')
         .setLabel('Recrear panel RUNS')
         .setStyle(ButtonStyle.Primary),
@@ -466,10 +460,6 @@ function buildAdminPanelButtons(guildConfig) {
       new ButtonBuilder()
         .setCustomId('main:clean:maritimo_terrestre')
         .setLabel('Limpiar canal MT')
-        .setStyle(ButtonStyle.Danger),
-      new ButtonBuilder()
-        .setCustomId('main:clean:aereo')
-        .setLabel('Limpiar canal Aereo')
         .setStyle(ButtonStyle.Danger),
       new ButtonBuilder()
         .setCustomId('main:clean:runs')
@@ -919,7 +909,6 @@ function buildChannelAssignmentText(guildConfig) {
   return [
     '### Canales de respuesta',
     `- Maritimo/Terrestre -> ${formatAssignedChannel(mtChannelId)}`,
-    `- Aereo -> ${formatAssignedChannel(getTaskChannelId(guildConfig, 'aereo'))}`,
     `- RUNS -> ${formatAssignedChannel(runsChannelId)}`,
     `- Plantacion -> ${formatAssignedChannel(plantationChannelId)}`,
     `- Vender -> ${formatAssignedChannel(venderChannelId)}`,
@@ -1060,29 +1049,11 @@ function createEvidenceKey(guildId, userId) {
 function buildMaritimeTerrestrialPanelPayload(guildConfig) {
   return {
     content:
-      '## Marítimo / Terrestre\n' +
-      `Marítimo tiene CD actual de ${getCustomCooldown(guildConfig, 'maritimo')}h y Terrestre CD actual de ${getCustomCooldown(guildConfig, 'terrestre')}h.\n` +
+      '## Marítimo / Terrestre / Aéreo\n' +
+      `Marítimo tiene CD actual de ${getCustomCooldown(guildConfig, 'maritimo')}h, Terrestre de ${getCustomCooldown(guildConfig, 'terrestre')}h ` +
+      `y Aéreo de ${getCustomCooldown(guildConfig, 'aereo')}h.\n` +
       'Selecciona uno y luego sube la evidencia (foto). La mision se valida automáticamente.',
     components: buildMainTaskButtons(guildConfig)
-  };
-}
-
-// Aereo usa el mismo flujo de evidencia que Maritimo/Terrestre, pero en su propio canal.
-function buildAereoPanelPayload(guildConfig) {
-  const hours = getCustomCooldown(guildConfig, 'aereo');
-  return {
-    content:
-      '## Aéreo\n' +
-      `Aéreo tiene CD actual de ${hours}h.\n` +
-      'Pulsa el botón y luego sube la evidencia (foto). La mision se valida automáticamente.',
-    components: [
-      new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId(`mt:aereo:${hours}`)
-          .setLabel(`Aereo (${hours}h)`)
-          .setStyle(ButtonStyle.Primary)
-      )
-    ]
   };
 }
 
@@ -1104,9 +1075,6 @@ async function buildMissionPanelPayload(taskKey, guildConfig) {
   const normalizedTaskKey = normalizeTaskKey(taskKey);
   if (normalizedTaskKey === 'maritimo_terrestre') {
     return buildMaritimeTerrestrialPanelPayload(guildConfig);
-  }
-  if (normalizedTaskKey === 'aereo') {
-    return buildAereoPanelPayload(guildConfig);
   }
   if (normalizedTaskKey === 'runs') {
     return buildRunsPanelPayload(guildConfig);
@@ -1323,11 +1291,6 @@ async function refreshRunsPanel(guild, guildConfig) {
   await publishMissionPanel(guild, guildConfig, 'runs', { ensureLast: true });
 }
 
-async function refreshAereoPanel(guild, guildConfig) {
-  if (!getTaskChannelId(guildConfig, 'aereo')) return;
-  await publishMissionPanel(guild, guildConfig, 'aereo', { ensureLast: true });
-}
-
 async function refreshMTPanel(guild, guildConfig) {
   if (!getTaskChannelId(guildConfig, 'maritimo_terrestre')) return;
   await publishMissionPanel(guild, guildConfig, 'maritimo_terrestre', { ensureLast: true });
@@ -1363,10 +1326,8 @@ async function notifyMain(guild, guildConfig, text) {
   await channel.send(text).catch(() => null);
 }
 
-async function notifyMaritimeTerrestrialChannel(guild, guildConfig, text, taskType = null) {
-  const channelId =
-    (taskType === 'aereo' && getTaskChannelId(guildConfig, 'aereo')) ||
-    getTaskChannelId(guildConfig, 'maritimo_terrestre');
+async function notifyMaritimeTerrestrialChannel(guild, guildConfig, text) {
+  const channelId = getTaskChannelId(guildConfig, 'maritimo_terrestre');
   if (!channelId) return;
   const channel = await guild.channels.fetch(channelId).catch(() => null);
   if (!channel || channel.type !== ChannelType.GuildText) return;
@@ -1432,8 +1393,7 @@ async function handleMaritimeTerrestrialButton(interaction, state, guildConfig) 
   await notifyMaritimeTerrestrialChannel(
     interaction.guild,
     guildConfig,
-    `📌 ${interaction.user} preparo registro de **${taskType} (${hours}h)** y espera evidencia.`,
-    taskType
+    `📌 ${interaction.user} preparo registro de **${taskType} (${hours}h)** y espera evidencia.`
   );
 }
 
@@ -2230,9 +2190,19 @@ async function schedulerTick() {
       changed = true;
     }
 
+    // Aereo tuvo panel propio durante poco tiempo; ahora va dentro del panel MT.
+    // Borramos ese mensaje suelto y sus datos.
+    if (guildConfig.missionPanels?.aereo || 'aereoChannelId' in guildConfig) {
+      await deleteMissionPanelMessage(guild, guildConfig.missionPanels?.aereo);
+      delete guildConfig.missionPanels.aereo;
+      delete guildConfig.responseChannels?.aereo;
+      delete guildConfig.aereoChannelId;
+      delete guildConfig.aereoPanelMessageId;
+      changed = true;
+    }
+
     // Refresh all mission panels (ensureLast ensures panel is always the latest message)
     await refreshMTPanel(guild, guildConfig);
-    await refreshAereoPanel(guild, guildConfig);
     await refreshRunsPanel(guild, guildConfig);
     await refreshPlantationPanel(guild, guildConfig);
     if (await publishAdminPanel(guild, guildConfig, { ensureLast: true })) changed = true;
@@ -2246,8 +2216,7 @@ async function schedulerTick() {
           guild,
           guildConfig,
           `✅ ${getMtTypeLabel(task.type)} (${task.cooldownHours}h) completado para <@${task.userId}>.` +
-            `${dmSent ? ' Se envio DM de disponibilidad.' : ' No se pudo enviar DM; se notifica aqui por mencion.'}`,
-          task.type
+            `${dmSent ? ' Se envio DM de disponibilidad.' : ' No se pudo enviar DM; se notifica aqui por mencion.'}`
         );
         changed = true;
       } else {
@@ -2557,8 +2526,7 @@ client.on(Events.MessageCreate, async (message) => {
       message.guild,
       guildConfig,
       `✅ ${message.author} valido evidencia para ${pending.taskType} (${pending.cooldownHours}h).` +
-        ` CD hasta <t:${Math.floor(endsAt / 1000)}:R>.`,
-      pending.taskType
+        ` CD hasta <t:${Math.floor(endsAt / 1000)}:R>.`
     );
     return;
   }
@@ -2796,10 +2764,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       // Refresh MT panel if CD affects button labels
       if (MT_TYPE_LABELS[tipoCd]) {
-        const panelKey = tipoCd === 'aereo' ? 'aereo' : 'maritimo_terrestre';
         try {
-          if (!getTaskChannelId(guildConfig, panelKey)) throw new Error('Canal no asignado');
-          await publishMissionPanel(interaction.guild, guildConfig, panelKey, {
+          await publishMissionPanel(interaction.guild, guildConfig, 'maritimo_terrestre', {
             logPrefix: '[config_cd]'
           });
           writeState(state);
