@@ -3,6 +3,7 @@
 Bot para gestionar tareas de:
 - Maritimo
 - Terrestre
+- Aereo (cada 12h)
 - Runs
 - Plantacion
 - Vender (Bolsa y Porro) — tarea cíclica automática
@@ -68,7 +69,7 @@ Bot para gestionar tareas de:
    - `/asignar_canal tarea:Plantacion canal:#canal`
 
 ## Flujo Rapido
-- **Maritimo/Terrestre**: Seleccionas una opcion, subes evidencia (foto) y el bot valida automaticamente la mision. CD configurable con `/config_cd`.
+- **Maritimo/Terrestre/Aereo**: Seleccionas una opcion (Maritimo 24h, Terrestre 8h, Aereo 12h por defecto), subes evidencia (foto) y el bot valida automaticamente la mision. CD configurable con `/config_cd`.
 - **RUNS**: Panel simplificado con solo **Iniciar** y **Terminar**. Al terminar entra a CD (4h por defecto) y luego notifica disponibilidad. Auto-cierre a 1 hora si no se termina manualmente.
 - **Plantacion**: Panel con botones `Ramas` y `Duplicado`.
 - **Vender (Bolsa y Porro)**: Notificación cíclica a @everyone cada 40 minutos. El mensaje se borra automaticamente a los 10 minutos. Se controla desde el Panel de Administración.
@@ -111,13 +112,14 @@ Los paneles de misión (MT, RUNS, Plantacion) y el Panel de Administración del 
 Permite a administradores cambiar el cooldown de cualquier tarea:
 - `/config_cd tarea:Maritimo horas:24`
 - `/config_cd tarea:Terrestre horas:8`
+- `/config_cd tarea:Aereo horas:12`
 - `/config_cd tarea:RUNS horas:4`
 - `/config_cd tarea:Plantacion (ciclo) horas:3`
 
 ### Estadisticas por mision y por periodo
 Boton **📊 Estadisticas** del Panel de Administración, o comando `/estadisticas`.
 
-Muestra, para cada mision (Marítimo, Terrestre, RUNS, Plantacion): total de misiones, usuarios distintos y ranking de quien la hizo. En RUNS ademas separa iniciadas / finalizadas / cerradas automaticamente; en Plantacion suma ciclos marcados y semillas usadas.
+Muestra, para cada mision (Marítimo, Terrestre, Aéreo, RUNS, Plantacion): total de misiones, usuarios distintos y ranking de quien la hizo. En RUNS ademas separa iniciadas / finalizadas / cerradas automaticamente; en Plantacion suma ciclos marcados y semillas usadas.
 
 El resumen muestra los 10 primeros de cada mision. Para ver **todos** los usuarios usa el menu **"Ver lista completa de usuarios de..."**: abre el ranking completo de esa mision, paginado de 20 en 20, con botones `◀ Anterior`, `Siguiente ▶` y `↩ Volver al resumen`. El periodo elegido se mantiene al navegar.
 

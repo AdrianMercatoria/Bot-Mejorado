@@ -162,6 +162,7 @@ const commands = [
         .addChoices(
           { name: 'Maritimo', value: 'maritimo' },
           { name: 'Terrestre', value: 'terrestre' },
+          { name: 'Aereo', value: 'aereo' },
           { name: 'RUNS', value: 'runs' },
           { name: 'Plantacion (ciclo)', value: 'plantacion' }
         )
@@ -350,7 +351,14 @@ function ensureRuntimeState(state) {
   return state;
 }
 
-const DEFAULT_COOLDOWNS = { maritimo: 24, terrestre: 8, runs: 4, plantacion: 3 };
+const DEFAULT_COOLDOWNS = { maritimo: 24, terrestre: 8, aereo: 12, runs: 4, plantacion: 3 };
+
+// Misiones del panel Marítimo/Terrestre/Aéreo: comparten flujo de evidencia y CD.
+const MT_TYPE_LABELS = { maritimo: 'Maritimo', terrestre: 'Terrestre', aereo: 'Aereo' };
+
+function getMtTypeLabel(type) {
+  return MT_TYPE_LABELS[type] || type;
+}
 
 const VENDER_NOTIFICATION_INTERVAL_MS = 40 * 60 * 1000; // 40 minutos
 const VENDER_DELETE_DELAY_MS = 10 * 60 * 1000; // 10 minutos
@@ -370,6 +378,7 @@ function isAdmin(interaction) {
 function buildMainTaskButtons(guildConfig) {
   const maritimoHours = getCustomCooldown(guildConfig, 'maritimo');
   const terrestreHours = getCustomCooldown(guildConfig, 'terrestre');
+  const aereoHours = getCustomCooldown(guildConfig, 'aereo');
   return [
     new ActionRowBuilder().addComponents(
       new ButtonBuilder()
@@ -379,7 +388,11 @@ function buildMainTaskButtons(guildConfig) {
       new ButtonBuilder()
         .setCustomId(`mt:terrestre:${terrestreHours}`)
         .setLabel(`Terrestre (${terrestreHours}h)`)
-        .setStyle(ButtonStyle.Success)
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId(`mt:aereo:${aereoHours}`)
+        .setLabel(`Aereo (${aereoHours}h)`)
+        .setStyle(ButtonStyle.Secondary)
     )
   ];
 }
@@ -1036,8 +1049,9 @@ function createEvidenceKey(guildId, userId) {
 function buildMaritimeTerrestrialPanelPayload(guildConfig) {
   return {
     content:
-      '## Marítimo / Terrestre\n' +
-      `Marítimo tiene CD actual de ${getCustomCooldown(guildConfig, 'maritimo')}h y Terrestre CD actual de ${getCustomCooldown(guildConfig, 'terrestre')}h.\n` +
+      '## Marítimo / Terrestre / Aéreo\n' +
+      `Marítimo tiene CD actual de ${getCustomCooldown(guildConfig, 'maritimo')}h, Terrestre de ${getCustomCooldown(guildConfig, 'terrestre')}h ` +
+      `y Aéreo de ${getCustomCooldown(guildConfig, 'aereo')}h.\n` +
       'Selecciona uno y luego sube la evidencia (foto). La mision se valida automáticamente.',
     components: buildMainTaskButtons(guildConfig)
   };
@@ -1329,7 +1343,7 @@ async function notifyRunsChannel(guild, guildConfig, text) {
 }
 
 async function notifyUserCooldownFinished(guild, task) {
-  const typeLabel = task.type === 'maritimo' ? 'Maritimo' : 'Terrestre';
+  const typeLabel = getMtTypeLabel(task.type);
   const message = `✅ Tu cooldown de **${typeLabel} (${task.cooldownHours}h)** en **${guild.name}** ya termino.`;
 
   const user = await client.users.fetch(task.userId).catch(() => null);
@@ -1710,6 +1724,10 @@ const STATS_MISSIONS = {
     label: 'Terrestre',
     match: (r) => r.kind === 'maritime_terrestrial' && r.type === 'terrestre'
   },
+  aereo: {
+    label: 'Aereo',
+    match: (r) => r.kind === 'maritime_terrestrial' && r.type === 'aereo'
+  },
   runs: { label: 'RUNS', match: (r) => r.kind === 'runs_start' },
   plantacion: { label: 'Plantacion', match: (r) => r.kind === 'plantation_start' },
   // Esta no cuenta entregas: suma importes. Solo entra lo que se leyo con fiabilidad.
@@ -1878,6 +1896,7 @@ function buildStatsText(state, guildId, { from, to, label }) {
   const mtReports = reports.filter((r) => r.kind === 'maritime_terrestrial');
   const maritime = mtReports.filter((r) => r.type === 'maritimo');
   const terrestrial = mtReports.filter((r) => r.type === 'terrestre');
+  const aerial = mtReports.filter((r) => r.type === 'aereo');
   const runsStarts = reports.filter((r) => r.kind === 'runs_start');
   const runsFinishes = reports.filter((r) => r.kind === 'runs_finish');
   const runsAutoClosed = reports.filter((r) => r.kind === 'runs_auto_close');
@@ -1898,6 +1917,11 @@ function buildStatsText(state, guildId, { from, to, label }) {
   lines.push(`### Terrestre (${terrestrial.length} misiones)`);
   lines.push(`Usuarios distintos: ${new Set(terrestrial.map((r) => r.userId)).size}`);
   lines.push(...formatUserRanking(countByUser(terrestrial)));
+  lines.push('');
+
+  lines.push(`### Aereo (${aerial.length} misiones)`);
+  lines.push(`Usuarios distintos: ${new Set(aerial.map((r) => r.userId)).size}`);
+  lines.push(...formatUserRanking(countByUser(aerial)));
   lines.push('');
 
   lines.push(`### RUNS (${runsStarts.length} iniciadas / ${runsFinishes.length} finalizadas)`);
@@ -2012,10 +2036,12 @@ function buildEstadoText(state, guildId, guildConfig, guildTasks) {
 
   const maritimeReports = mtReports.filter((r) => r.type === 'maritimo');
   const terrestrialReports = mtReports.filter((r) => r.type === 'terrestre');
+  const aerialReports = mtReports.filter((r) => r.type === 'aereo');
   const runsUniqueUsers = new Set(runsStartReports.map((r) => r.userId)).size;
   const lastMaritime = maritimeReports.slice().sort((a, b) => b.createdAt - a.createdAt)[0] || null;
   const lastTerrestrial =
     terrestrialReports.slice().sort((a, b) => b.createdAt - a.createdAt)[0] || null;
+  const lastAerial = aerialReports.slice().sort((a, b) => b.createdAt - a.createdAt)[0] || null;
 
   lines.push('## Estado General');
   lines.push(buildChannelAssignmentText(guildConfig));
@@ -2031,21 +2057,22 @@ function buildEstadoText(state, guildId, guildConfig, guildTasks) {
   lines.push(`- RUNS finalizadas (total): ${runsFinishReports.length}`);
   lines.push(`- Usuarios que iniciaron RUNS: ${runsUniqueUsers}`);
 
-  lines.push('### Maritimo/Terrestre activos');
+  lines.push('### Maritimo/Terrestre/Aereo activos');
   const active = (guildTasks?.maritimeTerrestrial || []).filter((t) => t.endsAt > now);
   if (!active.length) {
     lines.push('- Sin cooldowns activos');
   } else {
     for (const t of active) {
       lines.push(
-        `- <@${t.userId}> | ${t.type} (${t.cooldownHours}h): ${formatDuration(t.endsAt - now)}`
+        `- <@${t.userId}> | ${getMtTypeLabel(t.type)} (${t.cooldownHours}h): ${formatDuration(t.endsAt - now)}`
       );
     }
   }
 
-  lines.push('### Historial Maritimo/Terrestre');
+  lines.push('### Historial Maritimo/Terrestre/Aereo');
   lines.push(`- Maritimo completado: ${maritimeReports.length}`);
   lines.push(`- Terrestre completado: ${terrestrialReports.length}`);
+  lines.push(`- Aereo completado: ${aerialReports.length}`);
   lines.push(
     lastMaritime
       ? `- Ultimo Maritimo terminado por: <@${lastMaritime.userId}>`
@@ -2056,6 +2083,11 @@ function buildEstadoText(state, guildId, guildConfig, guildTasks) {
       ? `- Ultimo Terrestre terminado por: <@${lastTerrestrial.userId}>`
       : '- Ultimo Terrestre terminado por: Sin registros'
   );
+  lines.push(
+    lastAerial
+      ? `- Ultimo Aereo terminado por: <@${lastAerial.userId}>`
+      : '- Ultimo Aereo terminado por: Sin registros'
+  );
 
   if (mtReports.length) {
     const latest = mtReports
@@ -2064,7 +2096,7 @@ function buildEstadoText(state, guildId, guildConfig, guildTasks) {
       .slice(0, 5);
     lines.push('### Ultimos 5 registros MT');
     for (const item of latest) {
-      lines.push(`- <@${item.userId}> hizo ${item.type} (${item.cooldownHours}h)`);
+      lines.push(`- <@${item.userId}> hizo ${getMtTypeLabel(item.type)} (${item.cooldownHours}h)`);
     }
   }
 
@@ -2172,7 +2204,7 @@ async function schedulerTick() {
         await notifyMaritimeTerrestrialChannel(
           guild,
           guildConfig,
-          `✅ ${task.type} (${task.cooldownHours}h) completado para <@${task.userId}>.` +
+          `✅ ${getMtTypeLabel(task.type)} (${task.cooldownHours}h) completado para <@${task.userId}>.` +
             `${dmSent ? ' Se envio DM de disponibilidad.' : ' No se pudo enviar DM; se notifica aqui por mencion.'}`
         );
         changed = true;
@@ -2720,7 +2752,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       writeState(state);
 
       // Refresh MT panel if CD affects button labels
-      if (tipoCd === 'maritimo' || tipoCd === 'terrestre') {
+      if (MT_TYPE_LABELS[tipoCd]) {
         try {
           await publishMissionPanel(interaction.guild, guildConfig, 'maritimo_terrestre', {
             logPrefix: '[config_cd]'
