@@ -74,6 +74,23 @@ Bot para gestionar tareas de:
 - **Plantacion**: Panel con botones `Ramas` y `Duplicado`.
 - **Vender (Bolsa y Porro)**: Notificación cíclica a @everyone cada 40 minutos. El mensaje se borra automaticamente a los 10 minutos. Se controla desde el Panel de Administración.
 
+## Datos en Railway (importante)
+El bot corre en Railway (proyecto `lavish-adventure`), que despliega solo con cada push a `main`.
+Los datos viven en el volumen `bot-mejorado-volume`, montado en `/data` con `DATA_DIR=/data`.
+**No quites el volumen ni `DATA_DIR`**: sin ellos, cada despliegue arranca con los datos vacíos.
+
+Copia de seguridad manual a tu PC:
+```bash
+railway ssh -s Bot-Mejorado -- cat /data/state.json > respaldo-bot.json
+```
+
+## Envío de estadísticas a la web
+Con `WEB_URL` y `WEB_BOT_SECRET` configurados, el bot manda a la web (`POST /api/bot/eventos`) cada Marítimo, Terrestre, Aéreo y RUNS iniciada:
+- Al arrancar envía todo el historial pendiente y luego, cada 2 minutos, lo nuevo.
+- Cada evento lleva un id fijo, así que reenviar nunca cuenta doble en la web.
+- Si la web no sabe a qué miembro corresponde un Discord, ese evento queda pendiente y se reintenta hasta que se vincule ese Discord en *Miembros* de la web. El log del bot dice qué IDs faltan.
+- Plantación y dinero aún no se envían: la web todavía no tiene dónde guardarlos.
+
 ## Nuevas Funciones (Admin)
 
 ### Panel de Administración

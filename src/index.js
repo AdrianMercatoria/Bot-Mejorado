@@ -28,6 +28,7 @@ const {
   collectWordsFromChannel,
   cleanChannelCompletely
 } = require('./moderation');
+const webSync = require('./websync');
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
@@ -3323,6 +3324,16 @@ client.once(Events.ClientReady, async (readyClient) => {
   setInterval(() => {
     schedulerTick().catch((err) => console.error('Scheduler error:', err));
   }, 30 * 1000);
+
+  // Envio a la web: al arrancar manda todo el historial pendiente y luego
+  // cada 2 minutos lo nuevo y lo que estaba sin vincular.
+  if (webSync.isEnabled()) {
+    const runWebSync = () => webSync.syncToWeb().catch((err) => console.error('[web] Error al enviar:', err.message));
+    runWebSync();
+    setInterval(runWebSync, 2 * 60 * 1000);
+  } else {
+    console.warn('[web] WEB_URL o WEB_BOT_SECRET sin configurar: no se envian datos a la web.');
+  }
 });
 
 (async () => {

@@ -30,7 +30,9 @@ function createDefaultState() {
     pendingEvidence: {},
     pendingPlantation: {},
     // CDs sueltos creados con /cd desde cualquier canal.
-    timers: []
+    timers: [],
+    // Que reportes ya entraron en la web (ver websync.js).
+    webSync: { sentIds: [] }
   };
 }
 
