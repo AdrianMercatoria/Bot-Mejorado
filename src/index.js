@@ -63,7 +63,10 @@ const client = new Client({
   ],
   // Message: para enterarnos de ediciones/borrados en el canal de palabras
   // aunque el mensaje no este en cache (por ejemplo, tras reiniciar el bot).
-  partials: [Partials.Channel, Partials.Message]
+  partials: [Partials.Channel, Partials.Message],
+  // Si Discord pide esperar mas de un minuto (bloqueo de IP o limite global),
+  // la peticion falla en vez de quedarse colgada y bloquear el resto del bot.
+  rest: { rejectOnRateLimit: (data) => data.global || data.timeToReset > 60 * 1000 }
 });
 
 const commands = [
@@ -3321,8 +3324,29 @@ client.once(Events.ClientReady, async (readyClient) => {
     console.error('[admin-panel] Error al actualizar paneles al arrancar:', error);
   }
 
+  // Un solo ciclo a la vez. Si Discord no contesta, un ciclo puede quedarse
+  // esperando; sin este freno se apilaban uno cada 30s, cada uno repetia el
+  // mismo trabajo (p. ej. cerrar la misma RUNS) y ninguno llegaba a guardar.
+  let tickStartedAt = 0;
+  let lastStuckWarnAt = 0;
   setInterval(() => {
-    schedulerTick().catch((err) => console.error('Scheduler error:', err));
+    const now = Date.now();
+    if (tickStartedAt) {
+      if (now - tickStartedAt > 5 * 60 * 1000 && now - lastStuckWarnAt > 15 * 60 * 1000) {
+        lastStuckWarnAt = now;
+        console.warn(
+          `[scheduler] El ciclo lleva ${Math.round((now - tickStartedAt) / 60000)} min sin terminar: ` +
+            'Discord no responde (¿IP bloqueada o caida de Discord?).'
+        );
+      }
+      return;
+    }
+    tickStartedAt = now;
+    schedulerTick()
+      .catch((err) => console.error('Scheduler error:', err))
+      .finally(() => {
+        tickStartedAt = 0;
+      });
   }, 30 * 1000);
 
   // Envio a la web: al arrancar manda todo el historial pendiente y luego
