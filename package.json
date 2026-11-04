@@ -6,6 +6,7 @@
   "type": "commonjs",
   "scripts": {
     "start": "node src/index.js",
+    "test": "node --test",
     "dev": "node --watch src/index.js",
     "probar-ocr": "node tools/probar-ocr.js",
     "preview": "node tools/preview-server.js"
