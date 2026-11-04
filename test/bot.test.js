@@ -293,3 +293,155 @@ test('un admin y el dueno del servidor si pueden usar /setup', async () => {
   await flush();
   assert.doesNotMatch(asOwner.replies[0].content, /Solo administradores/);
 });
+
+// --- Buscador de precios ---
+
+function fakePriceSheet() {
+  global.fetch = async (url) => ({
+    ok: true,
+    text: async () =>
+      url.includes('htmlview')
+        ? 'name: "Armas", pageUrl: "https:\/\/x?gid=0"'
+        : ',COMPLEMENTOS,PRECIO MIN,PDB\n,Chaleco Pesado,"$40.000,00",❌\n'
+  });
+}
+
+function fakeMessage(channelId, content) {
+  const replies = [];
+  return {
+    replies,
+    guildId: GUILD_ID,
+    channelId,
+    content,
+    author: { id: 'u9', bot: false },
+    guild: fakeGuild(),
+    attachments: { size: 0 },
+    delete: async () => null,
+    reply: async (payload) => {
+      replies.push(payload);
+      return { delete: async () => null };
+    }
+  };
+}
+
+function setPriceChannel(channelId) {
+  const state = readState();
+  state.guilds[GUILD_ID].prices = { channelId, sheetId: null };
+  writeState(state);
+}
+
+test('en el canal buscador el bot responde sin mencionar a nadie', async () => {
+  seedGuild();
+  fakePriceSheet();
+  setPriceChannel('c-precios');
+
+  const message = fakeMessage('c-precios', 'chaleco @everyone');
+  client.emit(Events.MessageCreate, message);
+  await flush();
+  assert.equal(message.replies.length, 1);
+  assert.match(message.replies[0].content, /No encontré/);
+  assert.deepEqual(message.replies[0].allowedMentions.parse, []);
+
+  const found = fakeMessage('c-precios', 'chaleco');
+  client.emit(Events.MessageCreate, found);
+  await flush();
+  assert.match(found.replies[0].content, /Chaleco Pesado/);
+  assert.match(found.replies[0].content, /\$40\.000/);
+});
+
+test('fuera del canal buscador el bot no responde', async () => {
+  seedGuild();
+  fakePriceSheet();
+  setPriceChannel('c-precios');
+
+  const message = fakeMessage('otro-canal', 'chaleco');
+  client.emit(Events.MessageCreate, message);
+  await flush();
+  assert.equal(message.replies.length, 0);
+});
+
+test('quien no es admin no puede cambiar la hoja de precios', async () => {
+  seedGuild();
+  const interaction = fakeCommand('config_precios', {
+    admin: false,
+    values: { enlace: 'https://docs.google.com/spreadsheets/d/1eD_fIl9ZNro39KosscPvIjpbbjw1cMwL78ma-te3e8U/edit' }
+  });
+  client.emit(Events.InteractionCreate, interaction);
+  await flush();
+  assert.match(interaction.replies[0].content, /Solo administradores/);
+  assert.equal(readState().guilds[GUILD_ID].prices.sheetId, null);
+  assert.equal(registeredCommands.find((c) => c.name === 'config_precios').default_member_permissions, '8');
+});
+
+function fakeComponent(customId, { admin = true, select = false, values = [] } = {}) {
+  const calls = { reply: [], update: [], editReply: [], deferUpdate: 0 };
+  return {
+    calls,
+    customId,
+    values,
+    guildId: GUILD_ID,
+    guild: fakeGuild(),
+    channelId: 'c1',
+    user: { id: 'u1', tag: 'prueba' },
+    member: { permissions: { has: () => admin } },
+    replied: false,
+    deferred: false,
+    isChatInputCommand: () => false,
+    isStringSelectMenu: () => false,
+    isChannelSelectMenu: () => select,
+    isButton: () => !select,
+    isRepliable: () => true,
+    reply: async (payload) => calls.reply.push(payload),
+    update: async (payload) => calls.update.push(payload),
+    editReply: async (payload) => calls.editReply.push(payload),
+    deferUpdate: async () => {
+      calls.deferUpdate += 1;
+    }
+  };
+}
+
+test('un admin abre el panel de precios y elige el canal', async () => {
+  seedGuild();
+  fakePriceSheet();
+
+  const open = fakeComponent('main:precios');
+  client.emit(Events.InteractionCreate, open);
+  await flush();
+  assert.match(open.calls.reply[0].content, /Buscador de precios/);
+  assert.equal(open.calls.reply[0].ephemeral, true);
+
+  const select = fakeComponent('prices:channel', { select: true, values: ['c-nuevo'] });
+  client.emit(Events.InteractionCreate, select);
+  await flush();
+  assert.equal(readDisk().guilds[GUILD_ID].prices.channelId, 'c-nuevo');
+  assert.match(select.calls.editReply[0].content, /Artículos cargados/);
+  assert.equal('ephemeral' in select.calls.editReply[0], false);
+});
+
+test('el canal buscador no puede ser el de la lista de palabras', async () => {
+  seedGuild();
+  const state = readState();
+  state.guilds[GUILD_ID].moderation.wordsChannelId = 'c-palabras';
+  writeState(state);
+
+  const select = fakeComponent('prices:channel', { select: true, values: ['c-palabras'] });
+  client.emit(Events.InteractionCreate, select);
+  await flush();
+  assert.equal(readState().guilds[GUILD_ID].prices.channelId, null);
+  assert.match(select.calls.update[0].content, /Elige otro/);
+});
+
+test('quien no es admin no puede tocar el panel de precios', async () => {
+  seedGuild();
+  for (const options of [
+    ['main:precios', {}],
+    ['prices:clear', {}],
+    ['prices:channel', { select: true, values: ['c-x'] }]
+  ]) {
+    const interaction = fakeComponent(options[0], { admin: false, ...options[1] });
+    client.emit(Events.InteractionCreate, interaction);
+    await flush();
+    assert.match(interaction.calls.reply[0].content, /Solo administradores/, options[0]);
+  }
+  assert.equal(readState().guilds[GUILD_ID].prices.channelId, null);
+});

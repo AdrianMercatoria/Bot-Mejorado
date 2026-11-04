@@ -237,6 +237,21 @@ Muestra por cada imagen la cifra detectada, la confianza y si se contabilizaria.
 
 > El OCR es local y gratuito (`tesseract.js`), sin API ni coste por imagen. La primera ejecucion descarga ~15 MB de datos de idioma y los cachea en tu carpeta de datos; a partir de ahi funciona sin internet.
 
+## Buscador de precios
+
+Un canal donde cualquiera escribe lo que busca y el bot responde con nombre, tipo, precio y requisito, leyendo una hoja pública de Google.
+
+**Activarlo:** en el Panel de Administración pulsa **💲 Buscador de precios** y elige el canal. Para usar otra hoja: `/config_precios enlace:<enlace>`. La hoja debe estar compartida como "Cualquier persona con el enlace puede ver".
+
+**Cómo responde:**
+- No distingue mayúsculas ni acentos y acepta parte del nombre o el tipo: `revolver`, `chaleco`, `municion`.
+- Muestra hasta 10 resultados. La búsqueda y la respuesta se borran a los 2 minutos.
+- Las tablas sin columnas de requisito muestran "Requisito: no indicado".
+
+**Editar la hoja:** cambiar precios o agregar filas, tablas y pestañas no requiere tocar el bot, que la relee cada 10 minutos (o al pulsar **🔄 Actualizar ahora**). Una tabla nueva se reconoce por su título seguido de una columna que empiece por `PRECIO` o `% MAX`. Las demás columnas se tratan como requisito, salvo `OBSERVACIONES`, que sale como nota. Si Google falla, el bot sigue respondiendo con la última versión leída.
+
+El bot necesita **Gestionar mensajes** en ese canal para borrar las búsquedas.
+
 ## Conservar los datos entre actualizaciones
 
 El bot guarda todo (configuracion, cooldowns, historial de reportes) en `state.json`. Hay dos protecciones:

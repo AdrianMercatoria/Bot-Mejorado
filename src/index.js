@@ -29,6 +29,7 @@ const {
   cleanChannelCompletely
 } = require('./moderation');
 const webSync = require('./websync');
+const prices = require('./prices');
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
@@ -156,6 +157,16 @@ const commands = [
       opt
         .setName('hasta')
         .setDescription('Fecha fin: YYYY-MM-DD o YYYY-MM-DD HH:MM (tambien DD/MM/YYYY)')
+    ),
+  new SlashCommandBuilder()
+    .setName('config_precios')
+    .setDescription('Cambia la hoja de Google de la que lee el buscador de precios')
+    .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator)
+    .addStringOption((opt) =>
+      opt
+        .setName('enlace')
+        .setDescription('Enlace de la hoja de Google, compartida como publica')
+        .setRequired(true)
     ),
   new SlashCommandBuilder()
     .setName('config_cd')
@@ -293,6 +304,10 @@ function getGuildState(state, guildId) {
   }
   if (state.guilds[guildId].adminPanelRef === undefined) {
     state.guilds[guildId].adminPanelRef = null;
+  }
+
+  if (!state.guilds[guildId].prices || typeof state.guilds[guildId].prices !== 'object') {
+    state.guilds[guildId].prices = { channelId: null, sheetId: null };
   }
 
   ensureGuildPanelState(state.guilds[guildId]);
@@ -484,6 +499,10 @@ function buildAdminPanelButtons(guildConfig) {
       new ButtonBuilder()
         .setCustomId('main:moderacion')
         .setLabel('🧹 Limpieza y moderación')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId('main:precios')
+        .setLabel('💲 Buscador de precios')
         .setStyle(ButtonStyle.Primary)
     )
   ];
@@ -607,6 +626,97 @@ async function processTimers(state) {
     }
   }
   return true;
+}
+
+const PRICE_REPLY_TTL_MS = 2 * 60 * 1000;
+
+function getPriceSheetId(guildConfig) {
+  return guildConfig.prices?.sheetId || prices.DEFAULT_SHEET_ID;
+}
+
+function buildPricesPayload(guildConfig, notice = null) {
+  const channelId = guildConfig.prices?.channelId;
+  const sheetId = getPriceSheetId(guildConfig);
+  const { count, loadedAt, lastError } = prices.getCatalogStatus(sheetId);
+
+  const lines = ['### 💲 Buscador de precios'];
+  if (notice) lines.push(notice, '');
+  lines.push(`- **Canal**: ${formatAssignedChannel(channelId)}`);
+  lines.push(`- **Hoja**: <${prices.sheetUrl(sheetId)}>`);
+  lines.push(
+    loadedAt
+      ? `- **Artículos cargados**: ${count} (<t:${Math.floor(loadedAt / 1000)}:R>)`
+      : '- **Artículos cargados**: todavía ninguno'
+  );
+  if (lastError) lines.push(`- ⚠️ **Último error al leer la hoja**: ${lastError}`);
+  lines.push('');
+  lines.push(
+    channelId
+      ? 'Quien escriba en el canal recibe nombre, tipo, precio y requisito. La hoja se relee sola cada 10 minutos.'
+      : '⚠️ Elige un canal para activar el buscador.'
+  );
+  lines.push('Para usar otra hoja: `/config_precios enlace:...`');
+
+  return {
+    content: lines.join('\n'),
+    components: [
+      new ActionRowBuilder().addComponents(
+        new ChannelSelectMenuBuilder()
+          .setCustomId('prices:channel')
+          .setPlaceholder('💲 Canal donde se buscan los precios')
+          .addChannelTypes(ChannelType.GuildText)
+          .setMinValues(1)
+          .setMaxValues(1)
+      ),
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('prices:refresh')
+          .setLabel('🔄 Actualizar ahora')
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId('prices:clear')
+          .setLabel('Desactivar el buscador')
+          .setStyle(ButtonStyle.Danger)
+          .setDisabled(!channelId)
+      )
+    ],
+    ephemeral: true
+  };
+}
+
+// Tras deferUpdate el mensaje se edita con editReply, que no admite "ephemeral".
+function withoutEphemeral({ ephemeral, ...payload }) {
+  return payload;
+}
+
+async function refreshPriceCatalogs() {
+  const state = ensureRuntimeState(readState());
+  const sheetIds = new Set(
+    Object.values(state.guilds)
+      .filter((guildConfig) => guildConfig.prices?.channelId)
+      .map(getPriceSheetId)
+  );
+  await Promise.all([...sheetIds].map((sheetId) => prices.refreshCatalog(sheetId)));
+}
+
+async function handlePriceSearch(message, guildConfig) {
+  const query = message.content.trim();
+  if (query.length < prices.MIN_QUERY_LENGTH || query.length > prices.MAX_QUERY_LENGTH) return;
+
+  const items = await prices.getItems(getPriceSheetId(guildConfig));
+  const content = items
+    ? prices.buildSearchReply(items, query)
+    : '⚠️ No pude leer la hoja de precios. Inténtalo en un momento.';
+  const reply = await message.reply({
+    content,
+    allowedMentions: { parse: [], repliedUser: false }
+  });
+
+  // Mantiene el canal limpio. Si el bot se reinicia antes, esos mensajes se quedan.
+  setTimeout(() => {
+    message.delete().catch(() => null);
+    reply.delete().catch(() => null);
+  }, PRICE_REPLY_TTL_MS).unref();
 }
 
 function buildMoneyChannelPayload(guildConfig) {
@@ -2440,6 +2550,11 @@ client.on(Events.MessageCreate, guardListener('mensajes', async (message) => {
     return;
   }
 
+  if (guildConfig.prices.channelId && message.channelId === guildConfig.prices.channelId) {
+    await handlePriceSearch(message, guildConfig);
+    return;
+  }
+
   const key = createEvidenceKey(message.guildId, message.author.id);
   const pending = state.pendingEvidence[key];
   const plantKey = createPlantationInputKey(message.guildId, message.author.id);
@@ -2781,6 +2896,34 @@ client.on(Events.InteractionCreate, guardListener('interacciones', async (intera
       return;
     }
 
+    if (interaction.commandName === 'config_precios') {
+      if (!isAdmin(interaction)) {
+        await interaction.reply({ content: '⛔ Solo administradores pueden usar este comando.', ephemeral: true });
+        return;
+      }
+      const sheetId = prices.parseSheetId(interaction.options.getString('enlace', true));
+      if (!sheetId) {
+        await interaction.reply({
+          content: 'Ese enlace no es una hoja de Google. Debe empezar por `https://docs.google.com/spreadsheets/d/`.',
+          ephemeral: true
+        });
+        return;
+      }
+
+      await interaction.deferReply({ ephemeral: true });
+      await prices.refreshCatalog(sheetId);
+      const { count, lastError } = prices.getCatalogStatus(sheetId);
+      // Una hoja que no se puede leer no sustituye a la que ya funciona.
+      if (lastError) {
+        await interaction.editReply(`⚠️ No pude leer esa hoja y sigo usando la anterior: ${lastError}`);
+        return;
+      }
+      guildConfig.prices.sheetId = sheetId;
+      writeState(state);
+      await interaction.editReply(`✅ Hoja guardada: **${count}** artículos cargados.`);
+      return;
+    }
+
     if (interaction.commandName === 'config_cd') {
       if (!isAdmin(interaction)) {
         await interaction.reply({
@@ -2844,6 +2987,29 @@ client.on(Events.InteractionCreate, guardListener('interacciones', async (intera
     }
 
     await interaction.update(buildFullRankingView(state, interaction.guildId, missionKey, range, 0));
+    return;
+  }
+
+  if (interaction.isChannelSelectMenu() && interaction.customId === 'prices:channel') {
+    if (!isAdmin(interaction)) {
+      await interaction.reply({ content: '⛔ Solo administradores pueden cambiar este canal.', ephemeral: true });
+      return;
+    }
+
+    const channelId = interaction.values[0];
+    // En esos canales cada mensaje ya tiene otra funcion.
+    if (channelId === guildConfig.moderation.wordsChannelId || channelId === guildConfig.moneyReadChannelId) {
+      await interaction.update(
+        buildPricesPayload(guildConfig, '⚠️ Ese canal ya se usa para la lista de palabras o las fotos de dinero. Elige otro.')
+      );
+      return;
+    }
+
+    guildConfig.prices.channelId = channelId;
+    writeState(state);
+    await interaction.deferUpdate();
+    await prices.refreshCatalog(getPriceSheetId(guildConfig));
+    await interaction.editReply(withoutEphemeral(buildPricesPayload(guildConfig)));
     return;
   }
 
@@ -3044,6 +3210,25 @@ client.on(Events.InteractionCreate, guardListener('interacciones', async (intera
         return;
       }
       await interaction.reply(buildMoneyChannelPayload(guildConfig));
+      return;
+    }
+
+    if (interaction.customId === 'main:precios' || interaction.customId.startsWith('prices:')) {
+      if (!isAdmin(interaction)) {
+        await interaction.reply({ content: '⛔ Solo administradores pueden usar esta accion.', ephemeral: true });
+        return;
+      }
+      if (interaction.customId === 'main:precios') {
+        await interaction.reply(buildPricesPayload(guildConfig));
+      } else if (interaction.customId === 'prices:clear') {
+        guildConfig.prices.channelId = null;
+        writeState(state);
+        await interaction.update(buildPricesPayload(guildConfig));
+      } else if (interaction.customId === 'prices:refresh') {
+        await interaction.deferUpdate();
+        await prices.refreshCatalog(getPriceSheetId(guildConfig));
+        await interaction.editReply(withoutEphemeral(buildPricesPayload(guildConfig)));
+      }
       return;
     }
 
@@ -3382,6 +3567,11 @@ client.once(Events.ClientReady, guardListener('arranque', async (readyClient) =>
         tickStartedAt = 0;
       });
   }, 30 * 1000);
+
+  const runPriceRefresh = () =>
+    refreshPriceCatalogs().catch((error) => console.error('[precios] Error al actualizar:', error));
+  runPriceRefresh();
+  setInterval(runPriceRefresh, prices.REFRESH_INTERVAL_MS);
 
   // Envio a la web: al arrancar manda todo el historial pendiente y luego
   // cada 2 minutos lo nuevo y lo que estaba sin vincular.
