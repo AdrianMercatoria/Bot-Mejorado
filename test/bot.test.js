@@ -25,6 +25,7 @@ const GUILD_ID = 'g1';
 let client;
 let schedulerTick;
 let registeredCommands;
+const puts = [];
 
 function deferred() {
   let resolve;
@@ -83,8 +84,9 @@ before(async () => {
     client = this;
     return 'token';
   };
-  REST.prototype.put = async (_route, options) => {
-    registeredCommands = options.body;
+  REST.prototype.put = async (route, options) => {
+    puts.push({ route, names: options.body.map((c) => c.name) });
+    if (route.endsWith('/guilds/1/commands')) registeredCommands = options.body;
     return [];
   };
 
@@ -444,4 +446,28 @@ test('quien no es admin no puede tocar el panel de precios', async () => {
     assert.match(interaction.calls.reply[0].content, /Solo administradores/, options[0]);
   }
   assert.equal(readState().guilds[GUILD_ID].prices.channelId, null);
+});
+
+test('un servidor nuevo solo recibe el comando del buscador', async () => {
+  client.emit(Events.GuildCreate, { id: 'otro-servidor', name: 'Otro' });
+  await flush();
+  const put = puts.find((p) => p.route.includes('/guilds/otro-servidor/'));
+  assert.deepEqual(put.names, ['config_precios']);
+});
+
+test('el servidor principal conserva todos sus comandos', async () => {
+  const before = puts.length;
+  client.emit(Events.GuildCreate, { id: '1', name: 'Principal' });
+  await flush();
+  assert.equal(puts.length, before);
+  assert.ok(registeredCommands.length > 5);
+});
+
+test('/config_precios sin enlace abre el panel, sin necesitar /setup', async () => {
+  const interaction = fakeCommand('config_precios', { admin: true });
+  client.emit(Events.InteractionCreate, interaction);
+  await flush();
+  assert.match(interaction.replies[0].content, /Buscador de precios/);
+  assert.equal(interaction.replies[0].ephemeral, true);
+  assert.equal(readState().guilds[GUILD_ID].mainChannelId, null);
 });

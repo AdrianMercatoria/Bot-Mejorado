@@ -160,13 +160,12 @@ const commands = [
     ),
   new SlashCommandBuilder()
     .setName('config_precios')
-    .setDescription('Cambia la hoja de Google de la que lee el buscador de precios')
+    .setDescription('Configura el buscador de precios: canal y hoja de Google')
     .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator)
     .addStringOption((opt) =>
       opt
         .setName('enlace')
-        .setDescription('Enlace de la hoja de Google, compartida como publica')
-        .setRequired(true)
+        .setDescription('Enlace de otra hoja de Google, compartida como publica (opcional)')
     ),
   new SlashCommandBuilder()
     .setName('config_cd')
@@ -236,6 +235,19 @@ async function registerCommands() {
     await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
     console.log('[OK] Slash commands registrados globalmente — pueden tardar hasta 1 hora en propagarse.');
   }
+}
+
+// GUILD_ID es el servidor principal, con todos los comandos. En cualquier otro
+// servidor donde entre el bot solo se ofrece el buscador de precios.
+async function registerPriceCommandInGuild(guild) {
+  if (!GUILD_ID || guild.id === GUILD_ID) return;
+  const body = commands.filter((command) => command.name === 'config_precios');
+  await rest
+    .put(Routes.applicationGuildCommands(CLIENT_ID, guild.id), { body })
+    .then(() => console.log(`[precios] /config_precios disponible en ${guild.name} (${guild.id})`))
+    .catch((error) =>
+      console.error(`[precios] No se pudo registrar el comando en ${guild.name} (${guild.id}): ${error.message}`)
+    );
 }
 
 function getGuildState(state, guildId) {
@@ -2901,7 +2913,12 @@ client.on(Events.InteractionCreate, guardListener('interacciones', async (intera
         await interaction.reply({ content: '⛔ Solo administradores pueden usar este comando.', ephemeral: true });
         return;
       }
-      const sheetId = prices.parseSheetId(interaction.options.getString('enlace', true));
+      const link = interaction.options.getString('enlace');
+      if (!link) {
+        await interaction.reply(buildPricesPayload(guildConfig));
+        return;
+      }
+      const sheetId = prices.parseSheetId(link);
       if (!sheetId) {
         await interaction.reply({
           content: 'Ese enlace no es una hoja de Google. Debe empezar por `https://docs.google.com/spreadsheets/d/`.',
@@ -3568,6 +3585,8 @@ client.once(Events.ClientReady, guardListener('arranque', async (readyClient) =>
       });
   }, 30 * 1000);
 
+  await Promise.all([...client.guilds.cache.values()].map(registerPriceCommandInGuild));
+
   const runPriceRefresh = () =>
     refreshPriceCatalogs().catch((error) => console.error('[precios] Error al actualizar:', error));
   runPriceRefresh();
@@ -3583,6 +3602,8 @@ client.once(Events.ClientReady, guardListener('arranque', async (readyClient) =>
     console.warn('[web] WEB_URL o WEB_BOT_SECRET sin configurar: no se envian datos a la web.');
   }
 }));
+
+client.on(Events.GuildCreate, guardListener('servidor-nuevo', registerPriceCommandInGuild));
 
 client.on(Events.Error, (error) => console.error('[discord] Error del cliente:', error));
 client.on(Events.ShardError, (error) => console.error('[discord] Error de conexion:', error));
