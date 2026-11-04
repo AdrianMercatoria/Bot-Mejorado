@@ -84,6 +84,15 @@ test('la busqueda ignora mayusculas y acentos y acepta parte del nombre', () => 
   assert.deepEqual(names('no existe esto'), []);
 });
 
+test('acepta plurales', () => {
+  const names = (query) => prices.searchItems(items, query).map((item) => item.name);
+  assert.deepEqual(names('chalecos'), ['Chaleco Ligero', 'Chaleco Pesado']);
+  assert.deepEqual(names('chalecos pesados'), ['Chaleco Pesado']);
+  assert.ok(names('revolveres').includes('Revolver'));
+  assert.ok(names('pistolas').includes('Pistola Mk2'));
+  assert.deepEqual(names('.50 balls'), ['.50 ball']);
+});
+
 test('acepta varias palabras en cualquier orden y busca por tipo', () => {
   const found = prices.searchItems(items, 'pesado chaleco');
   assert.deepEqual(found.map((item) => item.name), ['Chaleco Pesado']);

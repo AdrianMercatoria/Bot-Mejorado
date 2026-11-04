@@ -2937,7 +2937,10 @@ client.on(Events.InteractionCreate, guardListener('interacciones', async (intera
       }
       guildConfig.prices.sheetId = sheetId;
       writeState(state);
-      await interaction.editReply(`✅ Hoja guardada: **${count}** artículos cargados.`);
+      // Se muestra el panel: guardar la hoja no asigna el canal, y sin canal no se responde.
+      await interaction.editReply(
+        withoutEphemeral(buildPricesPayload(guildConfig, `✅ Hoja guardada: **${count}** artículos cargados.`))
+      );
       return;
     }
 
