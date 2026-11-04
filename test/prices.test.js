@@ -93,6 +93,35 @@ test('acepta plurales', () => {
   assert.deepEqual(names('.50 balls'), ['.50 ball']);
 });
 
+test('una parte del nombre basta', () => {
+  assert.ok(prices.searchItems(items, 'revo').some((item) => item.name === 'Revolver'));
+});
+
+test('con erratas sugiere lo mas parecido', () => {
+  const similar = (query) => prices.findSimilarItems(items, query).map((item) => item.name);
+  assert.ok(similar('rebolver').includes('Revolver'));
+  assert.ok(similar('revolber').includes('Revolver'));
+  assert.ok(similar('rebol').includes('Revolver'));
+  assert.ok(similar('cargadro').includes('Cargadores'));
+  assert.ok(similar('pstola').includes('Pistola Mk2'));
+  assert.deepEqual(similar('chaleco pesadp'), ['Chaleco Pesado']);
+});
+
+test('no sugiere nada si no se parece a ningun articulo', () => {
+  assert.deepEqual(prices.findSimilarItems(items, 'xyzabc'), []);
+  assert.deepEqual(prices.findSimilarItems(items, 'hola'), []);
+  assert.deepEqual(prices.findSimilarItems(items, 'zz'), []);
+});
+
+test('la respuesta avisa de que es una sugerencia y limita los resultados', () => {
+  const reply = prices.buildSearchReply(items, 'rebolver');
+  assert.match(reply, /No encontré \*\*rebolver\*\* exacto\. Lo más parecido:/);
+  assert.match(reply, /\*\*Revolver\*\*/);
+  assert.ok(reply.length <= 2000);
+  assert.ok(prices.findSimilarItems(items, 'cuerp').length <= 5);
+  assert.match(prices.buildSearchReply(items, 'xyzabc'), /No encontré nada/);
+});
+
 test('acepta varias palabras en cualquier orden y busca por tipo', () => {
   const found = prices.searchItems(items, 'pesado chaleco');
   assert.deepEqual(found.map((item) => item.name), ['Chaleco Pesado']);

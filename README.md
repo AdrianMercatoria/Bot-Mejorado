@@ -247,7 +247,8 @@ Un canal donde cualquiera escribe lo que busca y el bot responde con nombre, tip
 
 **Cómo responde:**
 - No distingue mayúsculas ni acentos y acepta parte del nombre o el tipo: `revolver`, `chaleco`, `municion`.
-- Muestra hasta 10 resultados. La búsqueda y la respuesta se borran a los 2 minutos.
+- Si no hay coincidencia, sugiere hasta 5 artículos parecidos para cubrir erratas: `rebolver` encuentra "Revolver".
+- Muestra hasta 10 resultados. La búsqueda y la respuesta se borran a los 2 minutos, también si el bot se reinicia entremedio.
 - Las tablas sin columnas de requisito muestran "Requisito: no indicado".
 
 **Editar la hoja:** cambiar precios o agregar filas, tablas y pestañas no requiere tocar el bot, que la relee cada 10 minutos (o al pulsar **🔄 Actualizar ahora**). Una tabla nueva se reconoce por su título seguido de una columna que empiece por `PRECIO` o `% MAX`. Las demás columnas se tratan como requisito, salvo `OBSERVACIONES`, que sale como nota. Si Google falla, el bot sigue respondiendo con la última versión leída.
