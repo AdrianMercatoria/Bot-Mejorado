@@ -243,6 +243,8 @@ Un canal donde cualquiera escribe lo que busca y el bot responde con nombre, tip
 
 **Activarlo:** en el Panel de Administración pulsa **💲 Buscador de precios** y elige el canal. Para usar otra hoja: `/config_precios enlace:<enlace>`. La hoja debe estar compartida como "Cualquier persona con el enlace puede ver".
 
+**En otro servidor:** invita al bot con los scopes `bot` y `applications.commands`, y permisos de ver canales, enviar mensajes, gestionar mensajes y leer el historial. Allí solo aparece `/config_precios`: ejecútalo sin enlace para abrir este mismo panel y elegir el canal. No hace falta `/setup`.
+
 **Cómo responde:**
 - No distingue mayúsculas ni acentos y acepta parte del nombre o el tipo: `revolver`, `chaleco`, `municion`.
 - Muestra hasta 10 resultados. La búsqueda y la respuesta se borran a los 2 minutos.
