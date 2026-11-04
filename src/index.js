@@ -641,6 +641,8 @@ async function processTimers(state) {
 }
 
 const PRICE_REPLY_TTL_MS = 2 * 60 * 1000;
+const PRICE_DELETE_CHECK_MS = 10 * 1000;
+const DISCORD_UNKNOWN_MESSAGE = 10008;
 
 function getPriceSheetId(guildConfig) {
   return guildConfig.prices?.sheetId || prices.DEFAULT_SHEET_ID;
@@ -724,11 +726,39 @@ async function handlePriceSearch(message, guildConfig) {
     allowedMentions: { parse: [], repliedUser: false }
   });
 
-  // Mantiene el canal limpio. Si el bot se reinicia antes, esos mensajes se quedan.
-  setTimeout(() => {
-    message.delete().catch(() => null);
-    reply.delete().catch(() => null);
-  }, PRICE_REPLY_TTL_MS).unref();
+  // Se guarda en vez de usar un temporizador: asi un reinicio no deja mensajes sin borrar.
+  const state = ensureRuntimeState(readState());
+  state.pendingPriceDeletes.push({
+    channelId: message.channelId,
+    messageIds: [message.id, reply.id],
+    deleteAt: Date.now() + PRICE_REPLY_TTL_MS
+  });
+  writeState(state);
+}
+
+async function processPriceDeletes() {
+  const state = ensureRuntimeState(readState());
+  const now = Date.now();
+  const due = state.pendingPriceDeletes.filter((entry) => entry.deleteAt <= now);
+  if (!due.length) return;
+
+  state.pendingPriceDeletes = state.pendingPriceDeletes.filter((entry) => entry.deleteAt > now);
+  writeState(state);
+
+  for (const { channelId, messageIds } of due) {
+    const channel = await client.channels.fetch(channelId).catch(() => null);
+    if (!channel) {
+      console.error(`[precios] No se pudo acceder al canal ${channelId} para borrar mensajes`);
+      continue;
+    }
+    for (const messageId of messageIds) {
+      await channel.messages.delete(messageId).catch((error) => {
+        if (error.code !== DISCORD_UNKNOWN_MESSAGE) {
+          console.error(`[precios] No se pudo borrar el mensaje ${messageId}: ${error.message}`);
+        }
+      });
+    }
+  }
 }
 
 function buildMoneyChannelPayload(guildConfig) {
@@ -3589,6 +3619,17 @@ client.once(Events.ClientReady, guardListener('arranque', async (readyClient) =>
   }, 30 * 1000);
 
   await Promise.all([...client.guilds.cache.values()].map(registerPriceCommandInGuild));
+
+  let deletingPrices = false;
+  setInterval(() => {
+    if (deletingPrices) return;
+    deletingPrices = true;
+    processPriceDeletes()
+      .catch((error) => console.error('[precios] Error al borrar mensajes:', error))
+      .finally(() => {
+        deletingPrices = false;
+      });
+  }, PRICE_DELETE_CHECK_MS);
 
   const runPriceRefresh = () =>
     refreshPriceCatalogs().catch((error) => console.error('[precios] Error al actualizar:', error));

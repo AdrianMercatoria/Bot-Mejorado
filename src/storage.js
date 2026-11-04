@@ -31,6 +31,8 @@ function createDefaultState() {
     pendingPlantation: {},
     // CDs sueltos creados con /cd desde cualquier canal.
     timers: [],
+    // Busquedas de precios y sus respuestas pendientes de borrar.
+    pendingPriceDeletes: [],
     // Que reportes ya entraron en la web (ver websync.js).
     webSync: { sentIds: [] }
   };

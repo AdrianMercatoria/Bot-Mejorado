@@ -11,6 +11,10 @@ const REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 const RELOAD_RETRY_MS = 30 * 1000;
 const REQUEST_TIMEOUT_MS = 15 * 1000;
 const MAX_RESULTS = 10;
+const MAX_SIMILAR_RESULTS = 5;
+// Parecido minimo (de 0 a 1) para sugerir un articulo cuando no hay coincidencia.
+const MIN_SIMILARITY = 0.7;
+const MIN_FUZZY_WORD_LENGTH = 3;
 const MIN_QUERY_LENGTH = 2;
 const MAX_QUERY_LENGTH = 60;
 const DISCORD_MESSAGE_LIMIT = 2000;
@@ -153,6 +157,61 @@ function searchItems(items, query) {
     .map(({ item }) => item);
 }
 
+// Cuantas letras hay que cambiar, poner, quitar o intercambiar para pasar de a a b.
+function editDistance(a, b) {
+  const previous = Array.from({ length: b.length + 1 }, (_, i) => i);
+  let beforePrevious = [];
+  for (let i = 1; i <= a.length; i++) {
+    const current = [i];
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let best = Math.min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + cost);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+        best = Math.min(best, beforePrevious[j - 2] + 1);
+      }
+      current[j] = best;
+    }
+    beforePrevious = previous.slice();
+    previous.splice(0, previous.length, ...current);
+  }
+  return previous[b.length];
+}
+
+function similarity(a, b) {
+  return 1 - editDistance(a, b) / Math.max(a.length, b.length);
+}
+
+// Compara con la palabra entera y con su comienzo, para que "rebol" se parezca a "revolver".
+function wordSimilarity(word, candidate) {
+  if (candidate.includes(word)) return 1;
+  if (word.length < MIN_FUZZY_WORD_LENGTH) return 0;
+  const whole = similarity(word, candidate);
+  return candidate.length > word.length ? Math.max(whole, similarity(word, candidate.slice(0, word.length))) : whole;
+}
+
+function similarityScore(item, words) {
+  const candidates = `${normalizeText(item.name)} ${normalizeText(item.type)}`.split(' ');
+  let total = 0;
+  for (const word of words) {
+    const best = Math.max(...candidates.map((candidate) => wordSimilarity(word, candidate)));
+    if (best < MIN_SIMILARITY) return 0;
+    total += best;
+  }
+  return total / words.length;
+}
+
+// Para erratas: "rebolver" encuentra "Revolver" y "chaleco pesadp", "Chaleco Pesado".
+function findSimilarItems(items, query) {
+  const words = normalizeText(query).split(' ').filter(Boolean);
+  if (!words.length) return [];
+  return items
+    .map((item) => ({ item, score: similarityScore(item, words) }))
+    .filter(({ score }) => score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, MAX_SIMILAR_RESULTS)
+    .map(({ item }) => item);
+}
+
 // Devuelve el id de la hoja a partir de su enlace, o null si no es una hoja de Google.
 function parseSheetId(url) {
   const match = String(url).trim().match(/^https:\/\/docs\.google\.com\/spreadsheets\/d\/([\w-]{20,})(?:[/?#]|$)/);
@@ -266,6 +325,10 @@ function buildSearchReply(items, query) {
   const shown = sanitizeQuery(query);
   const results = searchItems(items, query);
   if (!results.length) {
+    const similar = findSimilarItems(items, query);
+    if (similar.length) {
+      return `🔎 No encontré **${shown}** exacto. Lo más parecido:\n\n${similar.map(formatItem).join('\n\n')}`;
+    }
     return `🔎 No encontré nada para **${shown}**. Prueba con otra palabra, por ejemplo \`chaleco\` o \`9mm\`.`;
   }
 
@@ -296,6 +359,7 @@ module.exports = {
   parseSheetId,
   sheetUrl,
   searchItems,
+  findSimilarItems,
   refreshCatalog,
   getItems,
   getCatalogStatus,

@@ -24,6 +24,7 @@ const GUILD_ID = 'g1';
 
 let client;
 let schedulerTick;
+let priceDeleteCheck;
 let registeredCommands;
 const puts = [];
 
@@ -98,6 +99,7 @@ before(async () => {
   const realSetInterval = global.setInterval;
   global.setInterval = (fn, ms) => {
     if (ms === 30 * 1000) schedulerTick = fn;
+    if (ms === 10 * 1000) priceDeleteCheck = fn;
     return { unref() {} };
   };
   client.emit(Events.ClientReady, { user: { tag: 'bot', id: '1' }, guilds: { fetch: async () => null } });
@@ -120,7 +122,8 @@ beforeEach(() => {
     reports: [],
     pendingEvidence: {},
     pendingPlantation: {},
-    timers: []
+    timers: [],
+    pendingPriceDeletes: []
   });
   writeState(state);
   client.guilds.fetch = async () => fakeGuild();
@@ -312,16 +315,16 @@ function fakeMessage(channelId, content) {
   const replies = [];
   return {
     replies,
+    id: `pregunta-${content}`,
     guildId: GUILD_ID,
     channelId,
     content,
     author: { id: 'u9', bot: false },
     guild: fakeGuild(),
     attachments: { size: 0 },
-    delete: async () => null,
     reply: async (payload) => {
       replies.push(payload);
-      return { delete: async () => null };
+      return { id: `respuesta-${content}` };
     }
   };
 }
@@ -489,4 +492,61 @@ test('guardar una hoja nueva muestra el panel para elegir el canal', async () =>
   assert.match(edits[0].content, /Hoja guardada/);
   assert.match(edits[0].content, /Elige un canal/);
   assert.equal(edits[0].components.length, 2);
+});
+
+test('la busqueda y la respuesta se borran a los 2 minutos, aunque el bot se reinicie', async () => {
+  seedGuild();
+  fakePriceSheet();
+  setPriceChannel('c-precios');
+
+  const message = fakeMessage('c-precios', 'chaleco');
+  const before = Date.now();
+  client.emit(Events.MessageCreate, message);
+  await flush();
+
+  // Queda guardado en disco, no en un temporizador que se pierde al reiniciar.
+  const [pending] = readDisk().pendingPriceDeletes;
+  assert.deepEqual(pending.messageIds, ['pregunta-chaleco', 'respuesta-chaleco']);
+  assert.ok(pending.deleteAt >= before + 2 * 60 * 1000);
+
+  const deleted = [];
+  client.channels.fetch = async () => ({
+    messages: {
+      delete: async (id) => {
+        deleted.push(id);
+      }
+    }
+  });
+
+  // Antes de tiempo no borra nada.
+  priceDeleteCheck();
+  await flush();
+  assert.deepEqual(deleted, []);
+
+  const state = readState();
+  state.pendingPriceDeletes[0].deleteAt = Date.now() - 1;
+  writeState(state);
+  priceDeleteCheck();
+  await flush();
+  assert.deepEqual(deleted, ['pregunta-chaleco', 'respuesta-chaleco']);
+  assert.deepEqual(readDisk().pendingPriceDeletes, []);
+});
+
+test('si un mensaje ya no existe, borra el resto', async () => {
+  const state = readState();
+  state.pendingPriceDeletes.push({ channelId: 'c', messageIds: ['ya-borrado', 'otro'], deleteAt: 0 });
+  writeState(state);
+
+  const deleted = [];
+  client.channels.fetch = async () => ({
+    messages: {
+      delete: async (id) => {
+        if (id === 'ya-borrado') throw Object.assign(new Error('Unknown Message'), { code: 10008 });
+        deleted.push(id);
+      }
+    }
+  });
+  priceDeleteCheck();
+  await flush();
+  assert.deepEqual(deleted, ['otro']);
 });
