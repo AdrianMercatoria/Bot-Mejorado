@@ -127,7 +127,19 @@ function readBackupOrQuarantine() {
   }
 }
 
+// Una sola copia del estado en memoria para todo el proceso. Los handlers
+// esperan a Discord o al OCR a mitad de camino: si cada uno trabajara con su
+// propia copia, al guardar pisaria lo que otro guardo mientras tanto.
+// Por eso, no reasignes una lista del estado con algo calculado antes de un
+// await: perderias lo que se haya agregado durante la espera.
+let currentState = null;
+
 function readState() {
+  if (!currentState) currentState = loadStateFromDisk();
+  return currentState;
+}
+
+function loadStateFromDisk() {
   ensureDataDir();
 
   let mainState = null;
@@ -236,6 +248,7 @@ function refreshBackup() {
 function writeState(state) {
   ensureDataDir();
   normalizeState(state);
+  currentState = state;
 
   // Respaldamos la version anterior (buena) antes de sustituirla.
   refreshBackup();

@@ -72,13 +72,15 @@ const client = new Client({
 const commands = [
   new SlashCommandBuilder()
     .setName('setup')
-    .setDescription('Configura el canal Main y crea paneles de control'),
+    .setDescription('Configura el canal Main y crea paneles de control')
+    .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator),
   new SlashCommandBuilder()
     .setName('estado')
     .setDescription('Muestra el estado actual de tareas en este servidor'),
   new SlashCommandBuilder()
     .setName('asignar_canal')
     .setDescription('Asigna el canal de respuesta para cada tarea')
+    .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator)
     .addStringOption((opt) =>
       opt
         .setName('tarea')
@@ -784,11 +786,18 @@ async function syncBannedWords(guild, guildConfig) {
   if (!channel || channel.type !== ChannelType.GuildText) {
     return { ok: false, error: 'No se puede acceder al canal de palabras' };
   }
+  const channelId = mod.wordsChannelId;
+  let words;
   try {
-    mod.bannedWords = await collectWordsFromChannel(channel);
+    words = await collectWordsFromChannel(channel);
   } catch (error) {
     return { ok: false, error: `No se pudo leer el canal de palabras: ${error.message}` };
   }
+  // Pudieron cambiar el canal mientras se leia: esta lista ya no le corresponde.
+  if (mod.wordsChannelId !== channelId) {
+    return { ok: false, error: 'El canal de palabras cambio mientras se leia' };
+  }
+  mod.bannedWords = words;
   return { ok: true, count: mod.bannedWords.length };
 }
 
@@ -804,12 +813,7 @@ async function resyncWordsIfNeeded(message) {
   const result = await syncBannedWords(guild, guildConfig);
   if (!result.ok) return;
 
-  // Releemos para no pisar cambios hechos mientras se leia el canal.
-  const fresh = ensureRuntimeState(readState());
-  const freshMod = getGuildState(fresh, message.guildId).moderation;
-  if (freshMod.wordsChannelId !== wordsChannelId) return;
-  freshMod.bannedWords = guildConfig.moderation.bannedWords;
-  writeState(fresh);
+  writeState(state);
   console.log(`[moderacion] guildId=${message.guildId} lista de palabras recargada (${result.count})`);
 }
 
@@ -2212,22 +2216,18 @@ async function schedulerTick() {
     if (await publishAdminPanel(guild, guildConfig, { ensureLast: true })) changed = true;
 
     // Process MT cooldown expirations
-    const activeMts = [];
-    for (const task of tasks.maritimeTerrestrial) {
-      if (task.endsAt <= now) {
-        const dmSent = await notifyUserCooldownFinished(guild, task);
-        await notifyMaritimeTerrestrialChannel(
-          guild,
-          guildConfig,
-          `✅ ${getMtTypeLabel(task.type)} (${task.cooldownHours}h) completado para <@${task.userId}>.` +
-            `${dmSent ? ' Se envio DM de disponibilidad.' : ' No se pudo enviar DM; se notifica aqui por mencion.'}`
-        );
-        changed = true;
-      } else {
-        activeMts.push(task);
-      }
+    for (const task of tasks.maritimeTerrestrial.filter((t) => t.endsAt <= now)) {
+      const dmSent = await notifyUserCooldownFinished(guild, task);
+      await notifyMaritimeTerrestrialChannel(
+        guild,
+        guildConfig,
+        `✅ ${getMtTypeLabel(task.type)} (${task.cooldownHours}h) completado para <@${task.userId}>.` +
+          `${dmSent ? ' Se envio DM de disponibilidad.' : ' No se pudo enviar DM; se notifica aqui por mencion.'}`
+      );
+      // Se quita de la lista actual: durante los avisos pudieron registrar otras misiones.
+      tasks.maritimeTerrestrial = tasks.maritimeTerrestrial.filter((t) => t !== task);
+      changed = true;
     }
-    tasks.maritimeTerrestrial = activeMts;
 
     // Process plantation cycle notifications
     for (const task of tasks.plantation) {
@@ -2299,6 +2299,29 @@ async function schedulerTick() {
 
   // Always persist state (includes pending evidence cleanup)
   writeState(state);
+}
+
+// Un listener async que falla sin capturar llega a client 'error' y, sin este
+// envoltorio, puede tumbar el proceso. Aqui se registra y el bot sigue.
+function guardListener(name, handler, onError = null) {
+  return async (...args) => {
+    try {
+      await handler(...args);
+    } catch (error) {
+      console.error(`[${name}] Error no controlado:`, error);
+      if (onError) await onError(...args);
+    }
+  };
+}
+
+async function replyInteractionError(interaction) {
+  if (!interaction.isRepliable()) return;
+  const fallback = { content: 'Ocurrio un error al procesar la accion.', ephemeral: true };
+  if (interaction.deferred || interaction.replied) {
+    await interaction.followUp(fallback).catch(() => null);
+  } else {
+    await interaction.reply(fallback).catch(() => null);
+  }
 }
 
 function isImageAttachment(attachment) {
@@ -2386,7 +2409,7 @@ async function handleMoneyImage(message, state, guildConfig) {
   }
 }
 
-client.on(Events.MessageCreate, async (message) => {
+client.on(Events.MessageCreate, guardListener('mensajes', async (message) => {
   if (message.author.bot || !message.guildId) return;
 
   const state = ensureRuntimeState(readState());
@@ -2534,7 +2557,7 @@ client.on(Events.MessageCreate, async (message) => {
     );
     return;
   }
-});
+}));
 
 // Un mensaje editado para incluir una palabra prohibida tambien se borra.
 client.on(Events.MessageUpdate, async (_oldMessage, newMessage) => {
@@ -2563,7 +2586,7 @@ client.on(Events.MessageDelete, async (message) => {
   );
 });
 
-client.on(Events.InteractionCreate, async (interaction) => {
+client.on(Events.InteractionCreate, guardListener('interacciones', async (interaction) => {
   if (!interaction.guildId) return;
 
   const state = ensureRuntimeState(readState());
@@ -2571,6 +2594,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   if (interaction.isChatInputCommand()) {
     if (interaction.commandName === 'setup') {
+      if (!isAdmin(interaction)) {
+        await interaction.reply({ content: '⛔ Solo administradores pueden usar este comando.', ephemeral: true });
+        return;
+      }
       await setupPanels(interaction, state, guildConfig);
       await interaction.reply({
         content:
@@ -2592,6 +2619,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (interaction.commandName === 'asignar_canal') {
+      if (!isAdmin(interaction)) {
+        await interaction.reply({ content: '⛔ Solo administradores pueden usar este comando.', ephemeral: true });
+        return;
+      }
       const taskKey = normalizeTaskKey(interaction.options.getString('tarea', true));
       const targetChannel = interaction.options.getChannel('canal', true);
       const taskSettings = getTaskSettings(taskKey);
@@ -3275,16 +3306,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   } catch (error) {
     console.error(error);
-    const fallback = { content: 'Ocurrio un error al procesar la accion.', ephemeral: true };
-    if (interaction.deferred || interaction.replied) {
-      await interaction.followUp(fallback).catch(() => null);
-    } else {
-      await interaction.reply(fallback).catch(() => null);
-    }
+    await replyInteractionError(interaction);
   }
-});
+}, replyInteractionError));
 
-client.once(Events.ClientReady, async (readyClient) => {
+client.once(Events.ClientReady, guardListener('arranque', async (readyClient) => {
   console.log(`[OK] Bot conectado como ${readyClient.user.tag} (${readyClient.user.id})`);
 
   const storageInfo = getStorageInfo();
@@ -3343,7 +3369,15 @@ client.once(Events.ClientReady, async (readyClient) => {
     }
     tickStartedAt = now;
     schedulerTick()
-      .catch((err) => console.error('Scheduler error:', err))
+      .catch((err) => {
+        console.error('Scheduler error:', err);
+        // Guarda lo avanzado antes del fallo para no repetir avisos tras un reinicio.
+        try {
+          writeState(readState());
+        } catch (writeError) {
+          console.error('Scheduler error al guardar:', writeError);
+        }
+      })
       .finally(() => {
         tickStartedAt = 0;
       });
@@ -3358,7 +3392,11 @@ client.once(Events.ClientReady, async (readyClient) => {
   } else {
     console.warn('[web] WEB_URL o WEB_BOT_SECRET sin configurar: no se envian datos a la web.');
   }
-});
+}));
+
+client.on(Events.Error, (error) => console.error('[discord] Error del cliente:', error));
+client.on(Events.ShardError, (error) => console.error('[discord] Error de conexion:', error));
+process.on('unhandledRejection', (reason) => console.error('[proceso] Promesa rechazada sin capturar:', reason));
 
 (async () => {
   try {

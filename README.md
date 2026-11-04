@@ -266,3 +266,9 @@ Abre `preview/panel-preview.html` en el navegador para simular los paneles sin D
 La tarjeta de `Estadisticas` trae historial simulado de los ultimos 30 dias para que el filtro por periodo se note, y se actualiza en vivo con lo que hagas en la demo. Los tiempos estan acelerados (CD de RUNS = 40s, ciclos de plantacion = 25s). `Recrear todo` reinicia el estado y regenera el historial simulado.
 
 > El preview todavia no simula las funciones mas nuevas (Vender, Evidencias pendientes, Limpiar canal).
+
+## Tests
+```bash
+npm test
+```
+Prueban el bot real con Discord simulado: no se conectan ni usan tu `.env` ni tus datos.
