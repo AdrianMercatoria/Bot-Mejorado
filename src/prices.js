@@ -124,13 +124,21 @@ function normalizeText(text) {
     .trim();
 }
 
+// Tambien acepta el plural: "chalecos" encuentra "Chaleco" y "revolveres", "Revolver".
+function includesWord(text, word) {
+  if (text.includes(word)) return true;
+  if (word.length < 4) return false;
+  if (word.endsWith('es') && text.includes(word.slice(0, -2))) return true;
+  return word.endsWith('s') && text.includes(word.slice(0, -1));
+}
+
 function matchScore(item, normalizedQuery, words) {
   const name = normalizeText(item.name);
   const haystack = `${name} ${normalizeText(item.type)}`;
-  if (!words.every((word) => haystack.includes(word))) return 0;
+  if (!words.every((word) => includesWord(haystack, word))) return 0;
   if (name === normalizedQuery) return 4;
   if (name.startsWith(normalizedQuery)) return 3;
-  if (words.every((word) => name.includes(word))) return 2;
+  if (words.every((word) => includesWord(name, word))) return 2;
   return 1; // Coincide por el tipo: "municion" lista toda la municion.
 }
 

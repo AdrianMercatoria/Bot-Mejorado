@@ -471,3 +471,22 @@ test('/config_precios sin enlace abre el panel, sin necesitar /setup', async () 
   assert.equal(interaction.replies[0].ephemeral, true);
   assert.equal(readState().guilds[GUILD_ID].mainChannelId, null);
 });
+
+test('guardar una hoja nueva muestra el panel para elegir el canal', async () => {
+  seedGuild();
+  fakePriceSheet();
+  const interaction = fakeCommand('config_precios', {
+    admin: true,
+    values: { enlace: 'https://docs.google.com/spreadsheets/d/1eD_fIl9ZNro39KosscPvIjpbbjw1cMwL78ma-te3e8U/edit' }
+  });
+  const edits = [];
+  interaction.deferReply = async () => null;
+  interaction.editReply = async (payload) => edits.push(payload);
+
+  client.emit(Events.InteractionCreate, interaction);
+  await flush();
+
+  assert.match(edits[0].content, /Hoja guardada/);
+  assert.match(edits[0].content, /Elige un canal/);
+  assert.equal(edits[0].components.length, 2);
+});
