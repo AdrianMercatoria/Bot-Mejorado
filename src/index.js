@@ -27,6 +27,8 @@ const { readAmountFromUrl, formatAmount } = require('./ocr');
 const {
   AUTO_CLEAN_INTERVAL_MS,
   ensureModerationState,
+  getChannelUses,
+  moveChannelUses,
   parseWordList,
   mergeWords,
   findBannedWord,
@@ -937,6 +939,95 @@ function buildModerationPayload(guildConfig, notice = null) {
 const cleaningChannels = new Set();
 
 // Ids de los paneles del bot, que la limpieza nunca debe borrar.
+const CHANNEL_RECREATE_WINDOW_MS = 10 * 60 * 1000;
+
+function isSameChannelAgain(channel, name, parentId) {
+  return channel.type === ChannelType.GuildText && channel.name === name && channel.parentId === parentId;
+}
+
+async function transferChannelUses(guild, guildConfig, oldId, newChannel, uses) {
+  moveChannelUses(guildConfig, oldId, newChannel.id);
+  console.log(`[canales] guildId=${guild.id} ${oldId} recreado como ${newChannel.id}: ${uses.join(', ')}`);
+  await notifyMain(
+    guild,
+    guildConfig,
+    `♻️ El canal <#${newChannel.id}> se recreó y conserva su configuración: ${uses.join(', ')}.`
+  ).catch(() => null);
+}
+
+// Clonar y borrar un canal le da un id nuevo. Si existe un canal igual recien
+// creado se traspasa ya; si no, se espera por si lo crean justo despues.
+async function handleChannelDeleted(channel) {
+  const state = ensureRuntimeState(readState());
+  if (!channel.guild || !state.guilds[channel.guild.id]) return;
+  const guildConfig = getGuildState(state, channel.guild.id);
+  const uses = getChannelUses(guildConfig, channel.id);
+  if (!uses.length) return;
+
+  const now = Date.now();
+  const clone = [...channel.guild.channels.cache.values()].find(
+    (other) =>
+      other.id !== channel.id &&
+      isSameChannelAgain(other, channel.name, channel.parentId) &&
+      now - other.createdTimestamp <= CHANNEL_RECREATE_WINDOW_MS
+  );
+  if (clone) {
+    await transferChannelUses(channel.guild, guildConfig, channel.id, clone, uses);
+  } else {
+    state.pendingChannelRecreates.push({
+      guildId: channel.guild.id,
+      channelId: channel.id,
+      name: channel.name,
+      parentId: channel.parentId,
+      deletedAt: now
+    });
+  }
+  writeState(state);
+}
+
+async function handleChannelCreated(channel) {
+  if (!channel.guild) return;
+  const state = ensureRuntimeState(readState());
+  const pending = state.pendingChannelRecreates.find(
+    (entry) => entry.guildId === channel.guild.id && isSameChannelAgain(channel, entry.name, entry.parentId)
+  );
+  if (!pending) return;
+
+  state.pendingChannelRecreates = state.pendingChannelRecreates.filter((entry) => entry !== pending);
+  const guildConfig = getGuildState(state, channel.guild.id);
+  const uses = getChannelUses(guildConfig, pending.channelId);
+  if (uses.length) await transferChannelUses(channel.guild, guildConfig, pending.channelId, channel, uses);
+  writeState(state);
+}
+
+// Paso el plazo sin que se recreara: se quita y se avisa en vez de seguir apuntando a la nada.
+async function processExpiredChannelDeletes(state, now) {
+  const expired = state.pendingChannelRecreates.filter(
+    (entry) => now - entry.deletedAt > CHANNEL_RECREATE_WINDOW_MS
+  );
+  if (!expired.length) return false;
+  state.pendingChannelRecreates = state.pendingChannelRecreates.filter((entry) => !expired.includes(entry));
+
+  for (const { guildId, channelId, name } of expired) {
+    if (!state.guilds[guildId]) continue;
+    const guildConfig = getGuildState(state, guildId);
+    const uses = getChannelUses(guildConfig, channelId);
+    if (!uses.length) continue;
+    moveChannelUses(guildConfig, channelId, null);
+    console.warn(`[canales] guildId=${guildId} canal ${name} (${channelId}) borrado: ${uses.join(', ')}`);
+
+    const guild = await client.guilds.fetch(guildId).catch(() => null);
+    if (guild) {
+      await notifyMain(
+        guild,
+        guildConfig,
+        `⚠️ Se borró el canal **#${name}** y ya no tiene efecto: ${uses.join(', ')}. Elige otro canal en el Panel de Administración.`
+      ).catch(() => null);
+    }
+  }
+  return true;
+}
+
 function getProtectedMessageIds(guildConfig) {
   const ids = new Set();
   for (const ref of Object.values(guildConfig.missionPanels || {})) {
@@ -2347,6 +2438,8 @@ async function schedulerTick() {
   let changed = false;
   const now = Date.now();
 
+  if (await processExpiredChannelDeletes(state, now)) changed = true;
+
   // Los CD de /cd son independientes de la configuracion del servidor:
   // se procesan aunque el guild no tenga paneles ni canales asignados.
   if (await processTimers(state)) changed = true;
@@ -3721,6 +3814,8 @@ client.once(Events.ClientReady, guardListener('arranque', async (readyClient) =>
 }));
 
 client.on(Events.GuildCreate, guardListener('servidor-nuevo', registerPriceCommandInGuild));
+client.on(Events.ChannelDelete, guardListener('canal-borrado', handleChannelDeleted));
+client.on(Events.ChannelCreate, guardListener('canal-creado', handleChannelCreated));
 
 client.on(Events.Error, (error) => console.error('[discord] Error del cliente:', error));
 client.on(Events.ShardError, (error) => console.error('[discord] Error de conexion:', error));

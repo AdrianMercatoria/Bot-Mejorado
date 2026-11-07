@@ -123,7 +123,8 @@ beforeEach(() => {
     pendingEvidence: {},
     pendingPlantation: {},
     timers: [],
-    pendingPriceDeletes: []
+    pendingPriceDeletes: [],
+    pendingChannelRecreates: []
   });
   writeState(state);
   client.guilds.fetch = async () => fakeGuild();
@@ -549,4 +550,130 @@ test('si un mensaje ya no existe, borra el resto', async () => {
   priceDeleteCheck();
   await flush();
   assert.deepEqual(deleted, ['otro']);
+});
+
+// --- Canales que se borran y se recrean ---
+
+const TEXT_CHANNEL = 0;
+
+function fakeChannel(id, { name = 'charla-banda', parentId = 'cat', others = [], createdAgoMs = 0, type = TEXT_CHANNEL } = {}) {
+  return {
+    id,
+    name,
+    parentId,
+    type,
+    createdTimestamp: Date.now() - createdAgoMs,
+    guild: { ...fakeGuild(), channels: { fetch: async () => null, cache: new Map(others.map((c) => [c.id, c])) } }
+  };
+}
+
+function seedModeratedChannel(id = 'viejo') {
+  seedGuild();
+  const state = readState();
+  const mod = state.guilds[GUILD_ID].moderation;
+  mod.watchChannelIds = ['otro', id];
+  mod.autoCleanChannels[id] = { nextCleanAt: 12345 };
+  mod.bannedWords = ['palabra'];
+  writeState(state);
+}
+
+test('al clonar un canal y borrar el original conserva moderacion y limpieza', async () => {
+  seedModeratedChannel();
+  const clone = fakeChannel('nuevo');
+  client.emit(Events.ChannelDelete, fakeChannel('viejo', { others: [clone] }));
+  await flush();
+
+  const { moderation } = readDisk().guilds[GUILD_ID];
+  assert.deepEqual(moderation.watchChannelIds, ['otro', 'nuevo']);
+  assert.deepEqual(moderation.autoCleanChannels, { nuevo: { nextCleanAt: 12345 } });
+  assert.deepEqual(moderation.bannedWords, ['palabra']);
+});
+
+test('tambien si primero se borra y luego se crea otro con el mismo nombre', async () => {
+  seedModeratedChannel();
+  client.emit(Events.ChannelDelete, fakeChannel('viejo'));
+  await flush();
+  assert.equal(readDisk().pendingChannelRecreates.length, 1);
+
+  client.emit(Events.ChannelCreate, fakeChannel('nuevo'));
+  await flush();
+  const disk = readDisk();
+  assert.deepEqual(disk.guilds[GUILD_ID].moderation.watchChannelIds, ['otro', 'nuevo']);
+  assert.deepEqual(disk.pendingChannelRecreates, []);
+});
+
+test('tambien traspasa el canal de la lista de palabras, el de precios y los de dinero', async () => {
+  seedGuild();
+  const state = readState();
+  const guild = state.guilds[GUILD_ID];
+  guild.moderation.wordsChannelId = 'viejo';
+  guild.moderation.bannedWords = ['palabra'];
+  guild.prices.channelId = 'viejo';
+  guild.moneyReadChannelId = 'viejo';
+  guild.moneyReportChannelId = 'viejo';
+  writeState(state);
+
+  client.emit(Events.ChannelDelete, fakeChannel('viejo', { others: [fakeChannel('nuevo')] }));
+  await flush();
+
+  const saved = readDisk().guilds[GUILD_ID];
+  assert.equal(saved.moderation.wordsChannelId, 'nuevo');
+  assert.deepEqual(saved.moderation.bannedWords, ['palabra']);
+  assert.equal(saved.prices.channelId, 'nuevo');
+  assert.equal(saved.moneyReadChannelId, 'nuevo');
+  assert.equal(saved.moneyReportChannelId, 'nuevo');
+});
+
+test('no traspasa a un canal con otro nombre, otra categoria o creado hace tiempo', async () => {
+  seedModeratedChannel();
+  const others = [
+    fakeChannel('distinto', { name: 'general' }),
+    fakeChannel('otra-categoria', { parentId: 'otra' }),
+    fakeChannel('antiguo', { createdAgoMs: 60 * 60 * 1000 }),
+    fakeChannel('voz', { type: 2 })
+  ];
+  client.emit(Events.ChannelDelete, fakeChannel('viejo', { others }));
+  await flush();
+  assert.deepEqual(readDisk().guilds[GUILD_ID].moderation.watchChannelIds, ['otro', 'viejo']);
+
+  client.emit(Events.ChannelCreate, fakeChannel('distinto', { name: 'general' }));
+  await flush();
+  assert.equal(readDisk().pendingChannelRecreates.length, 1);
+});
+
+test('borrar un canal sin configuracion no hace nada', async () => {
+  seedModeratedChannel();
+  client.emit(Events.ChannelDelete, fakeChannel('sin-uso'));
+  await flush();
+  assert.deepEqual(readDisk().pendingChannelRecreates, []);
+  assert.deepEqual(readDisk().guilds[GUILD_ID].moderation.watchChannelIds, ['otro', 'viejo']);
+});
+
+test('si no se recrea a tiempo, quita el canal y avisa en el Main', async () => {
+  seedModeratedChannel();
+  const state = readState();
+  state.guilds[GUILD_ID].mainChannelId = 'main';
+  writeState(state);
+  client.emit(Events.ChannelDelete, fakeChannel('viejo'));
+  await flush();
+
+  const later = readState();
+  later.pendingChannelRecreates[0].deletedAt = Date.now() - 11 * 60 * 1000;
+  writeState(later);
+
+  const sent = [];
+  client.guilds.fetch = async () => ({
+    ...fakeGuild(),
+    channels: {
+      fetch: async () => ({ id: 'main', type: TEXT_CHANNEL, send: async (text) => sent.push(text) })
+    }
+  });
+  schedulerTick();
+  await flush();
+
+  const disk = readDisk();
+  assert.deepEqual(disk.guilds[GUILD_ID].moderation.watchChannelIds, ['otro']);
+  assert.deepEqual(disk.guilds[GUILD_ID].moderation.autoCleanChannels, {});
+  assert.deepEqual(disk.pendingChannelRecreates, []);
+  assert.ok(sent.some((text) => /Se borró el canal \*\*#charla-banda\*\*/.test(text)), JSON.stringify(sent));
 });

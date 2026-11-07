@@ -33,6 +33,8 @@ function createDefaultState() {
     timers: [],
     // Busquedas de precios y sus respuestas pendientes de borrar.
     pendingPriceDeletes: [],
+    // Canales configurados que se borraron y aun pueden volver a crearse.
+    pendingChannelRecreates: [],
     // Que reportes ya entraron en la web (ver websync.js).
     webSync: { sentIds: [] }
   };
