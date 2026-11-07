@@ -100,7 +100,6 @@ Tablero publicado en el canal Main. Muestra de un vistazo cómo va cada misión 
 - **Evidencias pendientes** — **Revisar** lista y permite cancelar las no enviadas.
 - **Ver detalle** — Estado completo de todas las tareas.
 - **Estadísticas** — Por misión y rango de tiempo.
-- **Dinero** — Canal de lectura de fotos y de reporte.
 - **Moderación** — Limpieza automática cada 12h y filtro de palabras prohibidas (ver abajo).
 - **Precios** — Buscador de precios.
 - **Canales** — Canales asignados por tarea.
@@ -193,17 +192,13 @@ Limite de 20 CD activos por usuario. Los CD se guardan en la base de datos, asi 
 
 El bot lee las capturas que los usuarios publican en un canal y reporta en otro canal quien envio y cuanto.
 
-### Configuracion (desde el panel de administracion)
-Pulsa **Dinero** en el panel del Main. Se abre un mensaje privado con dos desplegables:
+### Configuracion
+Usa `/config_dinero lectura:#canal reporte:#canal` (solo administradores):
 
-- **📸 Canal de lectura**: donde los usuarios publican las fotos.
-- **💵 Canal de reporte**: donde el bot avisa de quien envio y que cantidad detecto.
-
-Eliges cada uno de la lista de canales del servidor y el panel se actualiza al momento indicando lo que falta. El boton **Desactivar el conteo** borra ambas asignaciones y detiene la lectura.
+- **lectura**: donde los usuarios publican las fotos.
+- **reporte**: donde el bot avisa de quien envio y que cantidad detecto.
 
 Puedes asignar solo uno de los dos y completar el otro despues. Si falta el de reporte, los avisos van al canal Main.
-
-> Tambien existe el comando `/config_dinero lectura:#canal reporte:#canal` si prefieres escribirlo.
 
 ### Como funciona
 1. Un usuario publica una foto en el canal de lectura.

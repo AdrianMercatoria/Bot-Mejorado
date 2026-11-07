@@ -547,7 +547,6 @@ function buildAdminPanelPayload(guildId, guildConfig) {
     .addActionRowComponents(
       new ActionRowBuilder().addComponents(
         panelButton('main:stats', 'Estadísticas', ButtonStyle.Primary),
-        panelButton('main:dinero', 'Dinero'),
         panelButton('main:moderacion', 'Moderación'),
         panelButton('main:precios', 'Precios'),
         panelButton('main:canales', 'Canales')

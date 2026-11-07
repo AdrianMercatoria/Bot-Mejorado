@@ -172,7 +172,6 @@ test('publica el tablero con los botones de todas las funciones', async () => {
   const { ids } = describePanel(channel.sent[0]);
   assert.deepEqual(ids.sort(), [
     'main:canales',
-    'main:dinero',
     'main:estado',
     'main:list-evidence',
     'main:manage:maritimo_terrestre',
