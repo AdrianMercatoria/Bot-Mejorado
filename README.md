@@ -94,19 +94,19 @@ Con `WEB_URL` y `WEB_BOT_SECRET` configurados, el bot manda a la web (`POST /api
 ## Nuevas Funciones (Admin)
 
 ### Panel de Administración
-Publicado automáticamente en el canal Main. Contiene:
-- **Ver estado** — Estado actual de todas las tareas
-- **Ver canales** — Canales asignados por tarea
-- **Evidencias pendientes** — Lista y permite cancelar evidencias no enviadas
-- **📊 Estadisticas** — Estadisticas generales por mision en un rango de tiempo
-- **💵 Canales de dinero** — Asigna con desplegables el canal de lectura de fotos y el de reporte
-- **Recrear panel MT/RUNS/Plantacion** — Fuerza republicar cada panel
-- **Limpiar canal MT/RUNS/Plantacion** — Elimina mensajes viejos y republica el panel
-- **▶️ Iniciar / ⛔ Detener Vender** — Controla la notificación cíclica de Vender
-- **🧹 Limpieza y moderación** — Limpieza automática cada 12h y filtro de palabras prohibidas (ver abajo)
+Tablero publicado en el canal Main. Muestra de un vistazo cómo va cada misión y se actualiza solo cuando algo cambia:
+- **Marítimo y terrestre y RUNS** — Estado y canal. **Gestionar** abre en privado **Recrear panel** y **Limpiar canal**.
+- **Vender** — **Iniciar** o **Detener** la notificación cíclica.
+- **Evidencias pendientes** — **Revisar** lista y permite cancelar las no enviadas.
+- **Ver detalle** — Estado completo de todas las tareas.
+- **Estadísticas** — Por misión y rango de tiempo.
+- **Dinero** — Canal de lectura de fotos y de reporte.
+- **Moderación** — Limpieza automática cada 12h y filtro de palabras prohibidas (ver abajo).
+- **Precios** — Buscador de precios.
+- **Canales** — Canales asignados por tarea.
 
 ### Limpieza automática cada 12h
-Botón **🧹 Limpieza y moderación** del Panel de Administración → menú **Canales a limpiar cada 12h** (hasta 25 canales).
+Botón **Moderación** del Panel de Administración → menú **Canales a limpiar cada 12h** (hasta 25 canales).
 - Cada 12 horas el bot borra **todos** los mensajes de esos canales. Solo se conservan los paneles del bot y los mensajes fijados.
 - La primera limpieza ocurre 12h después de elegir el canal. **Limpiar ahora** la lanza al momento y reinicia el contador.
 - Los mensajes de más de 14 días se borran de uno en uno (limitación de Discord), así que un canal muy antiguo puede tardar varios minutos.
@@ -134,7 +134,7 @@ Permite a administradores cambiar el cooldown de cualquier tarea:
 - `/config_cd tarea:Plantacion (ciclo) horas:3`
 
 ### Estadisticas por mision y por periodo
-Boton **📊 Estadisticas** del Panel de Administración, o comando `/estadisticas`.
+Boton **Estadísticas** del Panel de Administración, o comando `/estadisticas`.
 
 Muestra, para cada mision (Marítimo, Terrestre, Aéreo, RUNS, Plantacion): total de misiones, usuarios distintos y ranking de quien la hizo. En RUNS ademas separa iniciadas / finalizadas / cerradas automaticamente; en Plantacion suma ciclos marcados y semillas usadas.
 
@@ -187,7 +187,7 @@ Limite de 20 CD activos por usuario. Los CD se guardan en la base de datos, asi 
 El bot lee las capturas que los usuarios publican en un canal y reporta en otro canal quien envio y cuanto.
 
 ### Configuracion (desde el panel de administracion)
-Pulsa **💵 Canales de dinero** en el panel del Main. Se abre un mensaje privado con dos desplegables:
+Pulsa **Dinero** en el panel del Main. Se abre un mensaje privado con dos desplegables:
 
 - **📸 Canal de lectura**: donde los usuarios publican las fotos.
 - **💵 Canal de reporte**: donde el bot avisa de quien envio y que cantidad detecto.
@@ -241,7 +241,7 @@ Muestra por cada imagen la cifra detectada, la confianza y si se contabilizaria.
 
 Un canal donde cualquiera escribe lo que busca y el bot responde con nombre, tipo, precio y requisito, leyendo una hoja pública de Google.
 
-**Activarlo:** en el Panel de Administración pulsa **💲 Buscador de precios** y elige el canal. Para usar otra hoja: `/config_precios enlace:<enlace>`. La hoja debe estar compartida como "Cualquier persona con el enlace puede ver".
+**Activarlo:** en el Panel de Administración pulsa **Precios** y elige el canal. Para usar otra hoja: `/config_precios enlace:<enlace>`. La hoja debe estar compartida como "Cualquier persona con el enlace puede ver".
 
 **En otro servidor:** invita al bot con los scopes `bot` y `applications.commands`, y permisos de ver canales, enviar mensajes, gestionar mensajes y leer el historial. Allí solo aparece `/config_precios`: ejecútalo sin enlace para abrir este mismo panel y elegir el canal. No hace falta `/setup`.
 

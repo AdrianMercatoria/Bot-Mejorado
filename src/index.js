@@ -6,15 +6,20 @@ const {
   ButtonStyle,
   ChannelType,
   Client,
+  ContainerBuilder,
   Events,
   GatewayIntentBits,
+  MessageFlags,
   PermissionsBitField,
   Partials,
   REST,
   Routes,
+  SectionBuilder,
+  SeparatorBuilder,
   SlashCommandBuilder,
   StringSelectMenuBuilder,
-  ChannelSelectMenuBuilder
+  ChannelSelectMenuBuilder,
+  TextDisplayBuilder
 } = require('discord.js');
 const { readState, writeState, getStorageInfo } = require('./storage');
 const { addHours, formatDuration, formatLongDuration, parseDuration } = require('./time');
@@ -450,90 +455,126 @@ function buildRunsButtons(runsStatus) {
   ];
 }
 
-function buildAdminPanelButtons(guildConfig) {
-  const venderActive = guildConfig.vender?.active || false;
-  return [
-    new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId('main:estado')
-        .setLabel('Ver estado')
-        .setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder()
-        .setCustomId('main:canales')
-        .setLabel('Ver canales')
-        .setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder()
-        .setCustomId('main:list-evidence')
-        .setLabel('Evidencias pendientes')
-        .setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder()
-        .setCustomId('main:stats')
-        .setLabel('📊 Estadisticas')
-        .setStyle(ButtonStyle.Primary),
-      new ButtonBuilder()
-        .setCustomId('main:dinero')
-        .setLabel('💵 Canales de dinero')
-        .setStyle(ButtonStyle.Primary)
-    ),
-    new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId('main:regen-panel:maritimo_terrestre')
-        .setLabel('Recrear panel MT')
-        .setStyle(ButtonStyle.Primary),
-      new ButtonBuilder()
-        .setCustomId('main:regen-panel:runs')
-        .setLabel('Recrear panel RUNS')
-        .setStyle(ButtonStyle.Primary),
-      new ButtonBuilder()
-        .setCustomId('main:regen-panel:plantacion')
-        .setLabel('Recrear panel Plantacion')
-        .setStyle(ButtonStyle.Primary)
-    ),
-    new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId('main:clean:maritimo_terrestre')
-        .setLabel('Limpiar canal MT')
-        .setStyle(ButtonStyle.Danger),
-      new ButtonBuilder()
-        .setCustomId('main:clean:runs')
-        .setLabel('Limpiar canal RUNS')
-        .setStyle(ButtonStyle.Danger),
-      new ButtonBuilder()
-        .setCustomId('main:clean:plantacion')
-        .setLabel('Limpiar canal Plantacion')
-        .setStyle(ButtonStyle.Danger)
-    ),
-    new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId('main:vender-toggle')
-        .setLabel(venderActive ? '⛔ Detener Vender' : '▶️ Iniciar Vender')
-        .setStyle(venderActive ? ButtonStyle.Danger : ButtonStyle.Success),
-      new ButtonBuilder()
-        .setCustomId('main:moderacion')
-        .setLabel('🧹 Limpieza y moderación')
-        .setStyle(ButtonStyle.Primary),
-      new ButtonBuilder()
-        .setCustomId('main:precios')
-        .setLabel('💲 Buscador de precios')
-        .setStyle(ButtonStyle.Primary)
-    )
-  ];
+const ADMIN_PANEL_COLOR = 0x5865f2;
+
+function panelButton(customId, label, style = ButtonStyle.Secondary) {
+  return new ButtonBuilder().setCustomId(customId).setLabel(label).setStyle(style);
 }
 
-function buildAdminPanelPayload(guildConfig) {
-  const venderActive = guildConfig.vender?.active || false;
-  const cds = guildConfig.customCooldowns || {};
-  const cdEntries = Object.entries(cds);
-  const cdText = cdEntries.length
-    ? cdEntries.map(([t, h]) => `${t}: ${h}h`).join(', ')
-    : 'Ninguno (usando defaults)';
-  const content =
-    '## Panel de Administración\n' +
-    'Usa los botones para gestionar tareas y canales.\n' +
-    `Vender (Bolsa y Porro): **${venderActive ? 'Activo 🟢' : 'Inactivo 🔴'}**\n` +
-    `CDs personalizados: ${cdText}\n` +
-    '_Usa `/config_cd` para cambiar cooldowns._';
-  return { content, components: buildAdminPanelButtons(guildConfig) };
+function panelSection(text, button) {
+  return new SectionBuilder()
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent(text))
+    .setButtonAccessory(button);
+}
+
+function panelChannel(channelId) {
+  return channelId ? `<#${channelId}>` : 'sin canal asignado';
+}
+
+function discordTime(timestampMs) {
+  return `<t:${Math.floor(timestampMs / 1000)}:R>`;
+}
+
+function buildRunsStatus(runs) {
+  if (runs.status === 'in_progress') {
+    return { dot: '🔵', text: runs.startedAt ? `En curso desde ${discordTime(runs.startedAt)}` : 'En curso' };
+  }
+  if (runs.status === 'cooldown') {
+    return { dot: '🟡', text: runs.cooldownEndsAt ? `En CD, disponible ${discordTime(runs.cooldownEndsAt)}` : 'En CD' };
+  }
+  return { dot: '🟢', text: 'Disponible' };
+}
+
+// Tablero del canal Main. Las horas usan marcas de Discord, que se actualizan
+// solas: el mensaje solo hay que editarlo cuando cambia el estado de algo.
+function buildAdminPanelPayload(guildId, guildConfig) {
+  const state = ensureRuntimeState(readState());
+  const tasks = state.tasks[guildId] || {};
+  const now = Date.now();
+
+  const activeMts = (tasks.maritimeTerrestrial || []).filter((task) => task.endsAt > now).length;
+  const pendingEvidence = Object.values(state.pendingEvidence).filter((entry) => entry.guildId === guildId).length;
+
+  const mtChannel = getTaskChannelId(guildConfig, 'maritimo_terrestre');
+  const runsChannel = getTaskChannelId(guildConfig, 'runs');
+  const venderChannel = getTaskChannelId(guildConfig, 'vender');
+  const runs = buildRunsStatus(guildConfig.runs);
+  const vender = guildConfig.vender || {};
+
+  const cooldowns = Object.entries(guildConfig.customCooldowns || {});
+  const cooldownText = cooldowns.length
+    ? cooldowns.map(([task, hours]) => `${task}: ${hours}h`).join(', ')
+    : 'por defecto';
+
+  const container = new ContainerBuilder()
+    .setAccentColor(ADMIN_PANEL_COLOR)
+    .addSectionComponents(
+      panelSection(
+        `## Panel de administración\nCD ${cooldownText} · se cambian con \`/config_cd\``,
+        panelButton('main:estado', 'Ver detalle')
+      )
+    )
+    .addSeparatorComponents(new SeparatorBuilder())
+    .addSectionComponents(
+      panelSection(
+        `${mtChannel ? '🟢' : '⚪'} **Marítimo y terrestre**\n${activeMts} en CD · ${panelChannel(mtChannel)}`,
+        panelButton('main:manage:maritimo_terrestre', 'Gestionar')
+      ),
+      panelSection(
+        `${runsChannel ? runs.dot : '⚪'} **RUNS**\n${runs.text} · ${panelChannel(runsChannel)}`,
+        panelButton('main:manage:runs', 'Gestionar')
+      ),
+      panelSection(
+        `${vender.active ? '🟢' : '🔴'} **Vender**\n` +
+          (vender.active && vender.nextNotificationAt
+            ? `Activo, próximo aviso ${discordTime(vender.nextNotificationAt)}`
+            : vender.active
+              ? 'Activo'
+              : 'Inactivo · aviso cada 40 min') +
+          ` · ${panelChannel(venderChannel)}`,
+        vender.active
+          ? panelButton('main:vender-toggle', 'Detener', ButtonStyle.Danger)
+          : panelButton('main:vender-toggle', 'Iniciar', ButtonStyle.Success)
+      ),
+      panelSection(
+        `${pendingEvidence ? '🟡' : '🟢'} **Evidencias pendientes**\n${pendingEvidence ? `${pendingEvidence} por enviar` : 'Ninguna'}`,
+        panelButton('main:list-evidence', 'Revisar')
+      )
+    )
+    .addSeparatorComponents(new SeparatorBuilder())
+    .addActionRowComponents(
+      new ActionRowBuilder().addComponents(
+        panelButton('main:stats', 'Estadísticas', ButtonStyle.Primary),
+        panelButton('main:dinero', 'Dinero'),
+        panelButton('main:moderacion', 'Moderación'),
+        panelButton('main:precios', 'Precios'),
+        panelButton('main:canales', 'Canales')
+      )
+    );
+
+  return {
+    components: [container],
+    flags: MessageFlags.IsComponentsV2,
+    allowedMentions: { parse: [] }
+  };
+}
+
+function buildManageMissionPayload(guildConfig, taskKey) {
+  const settings = getTaskSettings(taskKey);
+  const channelId = getTaskChannelId(guildConfig, taskKey);
+  return {
+    content:
+      `### ${settings.label}\n` +
+      `Canal: ${channelId ? `<#${channelId}>` : 'sin asignar. Usa `/asignar_canal`.'}\n` +
+      '_**Recrear panel** lo publica de nuevo. **Limpiar canal** borra los mensajes del canal y vuelve a publicarlo._',
+    components: [
+      new ActionRowBuilder().addComponents(
+        panelButton(`main:regen-panel:${taskKey}`, 'Recrear panel').setDisabled(!channelId),
+        panelButton(`main:clean:${taskKey}`, 'Limpiar canal', ButtonStyle.Danger).setDisabled(!channelId)
+      )
+    ],
+    ephemeral: true
+  };
 }
 
 // Panel para asignar los canales del conteo de dinero desde el Main,
@@ -1356,8 +1397,11 @@ async function publishMissionPanel(guild, guildConfig, taskKey, options = {}) {
   };
 }
 
-// options.ensureLast: si hay mensajes mas nuevos, borra el panel y lo publica
-// de nuevo al final. Si ya es el ultimo, no lo toca (se llama cada 30s).
+// Ultimo contenido publicado por servidor, para no editar el panel si nada cambio.
+const lastAdminPanelContent = new Map();
+
+// options.ensureLast: si hay mensajes mas nuevos, publica el panel de nuevo al
+// final. Si ya es el ultimo, solo lo edita cuando cambio algo (se llama cada 30s).
 async function publishAdminPanel(guild, guildConfig, options = {}) {
   const channelId = guildConfig.mainChannelId;
   if (!channelId) return null;
@@ -1365,30 +1409,45 @@ async function publishAdminPanel(guild, guildConfig, options = {}) {
   const channel = await fetchMissionPanelChannel(guild, channelId);
   if (!channel) return null;
 
-  const payload = buildAdminPanelPayload(guildConfig);
-  let panelMessage = null;
+  const payload = buildAdminPanelPayload(guild.id, guildConfig);
+  const content = JSON.stringify(payload.components.map((component) => component.toJSON()));
   const previousRef = guildConfig.adminPanelRef;
+  let previousMessage = null;
 
   if (previousRef?.messageId && previousRef.channelId === channel.id) {
-    const previousMessage = await channel.messages.fetch(previousRef.messageId).catch(() => null);
-    if (previousMessage) {
-      if (options.ensureLast) {
-        const newer = await channel.messages.fetch({ after: previousMessage.id, limit: 1 }).catch(() => null);
-        if (!newer) return previousMessage;
-        if (newer.size === 0) return previousMessage;
-        await previousMessage.delete().catch(() => null);
-      } else {
-        panelMessage = await previousMessage.edit(payload).catch(() => null);
-      }
+    previousMessage = await channel.messages.fetch(previousRef.messageId).catch(() => null);
+  }
+
+  let panelMessage = null;
+  // Un mensaje normal no se puede convertir en tablero: hay que publicarlo de nuevo.
+  if (previousMessage?.flags?.has(MessageFlags.IsComponentsV2)) {
+    let isLast = true;
+    if (options.ensureLast) {
+      const newer = await channel.messages.fetch({ after: previousMessage.id, limit: 1 }).catch(() => null);
+      if (!newer) return previousMessage;
+      isLast = newer.size === 0;
+    }
+    if (isLast) {
+      if (options.ensureLast && lastAdminPanelContent.get(guild.id) === content) return previousMessage;
+      panelMessage = await previousMessage.edit(payload).catch((error) => {
+        console.error(`[admin-panel] guildId=${guild.id} no se pudo editar: ${error.message}`);
+        return null;
+      });
     }
   }
 
   if (!panelMessage) {
-    panelMessage = await channel.send(payload).catch(() => null);
+    panelMessage = await channel.send(payload).catch((error) => {
+      console.error(`[admin-panel] guildId=${guild.id} no se pudo publicar: ${error.message}`);
+      return null;
+    });
+    // El anterior se borra despues: si Discord rechaza el nuevo, el panel sigue ahi.
+    if (panelMessage && previousMessage) await previousMessage.delete().catch(() => null);
   }
 
   if (panelMessage) {
     guildConfig.adminPanelRef = { channelId: channel.id, messageId: panelMessage.id };
+    lastAdminPanelContent.set(guild.id, content);
   }
 
   return panelMessage;
@@ -3162,6 +3221,20 @@ client.on(Events.InteractionCreate, guardListener('interacciones', async (intera
       interaction.customId.startsWith('plant:add4:') ||
       interaction.customId.startsWith('plant:finish:')) {
       await handlePlantationActionButton(interaction, state, guildConfig);
+      return;
+    }
+
+    if (interaction.customId.startsWith('main:manage:')) {
+      if (!isAdmin(interaction)) {
+        await interaction.reply({ content: '⛔ Solo administradores pueden usar esta accion.', ephemeral: true });
+        return;
+      }
+      const taskKey = interaction.customId.replace('main:manage:', '');
+      if (!getTaskSettings(taskKey)) {
+        await interaction.reply({ content: `Tipo de tarea no soportado: **${taskKey}**.`, ephemeral: true });
+        return;
+      }
+      await interaction.reply(buildManageMissionPayload(guildConfig, taskKey));
       return;
     }
 
