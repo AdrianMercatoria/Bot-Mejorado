@@ -29,6 +29,40 @@ function ensureModerationState(guildConfig) {
   return mod;
 }
 
+// Para que usos tiene asignado este canal. Discord da un id nuevo a un canal
+// clonado, asi que estos son los datos que hay que traspasar al recrearlo.
+function getChannelUses(guildConfig, channelId) {
+  const mod = ensureModerationState(guildConfig);
+  const uses = [];
+  if (mod.watchChannelIds.includes(channelId)) uses.push('moderación de palabras');
+  if (mod.autoCleanChannels[channelId]) uses.push('limpieza automática');
+  if (mod.wordsChannelId === channelId) uses.push('lista de palabras');
+  if (guildConfig.prices?.channelId === channelId) uses.push('buscador de precios');
+  if (guildConfig.moneyReadChannelId === channelId) uses.push('lectura de dinero');
+  if (guildConfig.moneyReportChannelId === channelId) uses.push('reporte de dinero');
+  return uses;
+}
+
+// Pasa la configuracion de oldId a newId. Con newId null, solo la quita.
+function moveChannelUses(guildConfig, oldId, newId) {
+  const mod = ensureModerationState(guildConfig);
+
+  if (mod.watchChannelIds.includes(oldId)) {
+    const others = mod.watchChannelIds.filter((id) => id !== oldId && id !== newId);
+    mod.watchChannelIds = newId ? [...others, newId] : others;
+  }
+  if (mod.autoCleanChannels[oldId]) {
+    // Conserva cuando toca la proxima limpieza.
+    if (newId) mod.autoCleanChannels[newId] = mod.autoCleanChannels[oldId];
+    delete mod.autoCleanChannels[oldId];
+  }
+  // La lista de palabras se conserva aunque el canal nuevo este vacio.
+  if (mod.wordsChannelId === oldId) mod.wordsChannelId = newId;
+  if (guildConfig.prices?.channelId === oldId) guildConfig.prices.channelId = newId;
+  if (guildConfig.moneyReadChannelId === oldId) guildConfig.moneyReadChannelId = newId;
+  if (guildConfig.moneyReportChannelId === oldId) guildConfig.moneyReportChannelId = newId;
+}
+
 // Minusculas y sin acentos, para que "Película" y "pelicula" cuenten igual.
 function normalizeText(text) {
   return String(text || '')
@@ -141,6 +175,8 @@ async function cleanChannelCompletely(channel, keepIds = new Set()) {
 module.exports = {
   AUTO_CLEAN_INTERVAL_MS,
   ensureModerationState,
+  getChannelUses,
+  moveChannelUses,
   parseWordList,
   mergeWords,
   findBannedWord,
