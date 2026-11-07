@@ -119,6 +119,13 @@ En el mismo panel:
 - El canal de la lista nunca se modera ni se limpia automáticamente.
 - El bot necesita el permiso **Gestionar mensajes** en los canales moderados y en los que limpia.
 
+### Si borras o clonas un canal configurado
+Discord da un ID nuevo a cada canal clonado. El bot traspasa la moderación, la limpieza, la lista de palabras, el buscador de precios y los canales de dinero si en menos de 10 minutos aparece un canal de texto con el **mismo nombre y la misma categoría**, y avisa en el Main. Si no aparece, quita ese canal de la configuración y avisa para que elijas otro.
+
+Los canales y paneles de misión (MT, RUNS, Plantación, Vender) no se traspasan: hay que reasignarlos con `/asignar_canal`.
+
+> Para vaciar un canal no hace falta clonarlo: usa **Limpiar ahora** en **🧹 Limpieza y moderación**.
+
 ### Comando `/config_dinero`
 Configura el conteo automático de dinero leyendo las fotos que envían los usuarios. Ver [Conteo automatico de dinero por fotos](#conteo-automatico-de-dinero-por-fotos).
 
