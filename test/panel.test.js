@@ -179,7 +179,8 @@ test('publica el tablero con los botones de todas las funciones', async () => {
     'main:moderacion',
     'main:precios',
     'main:stats',
-    'main:vender-toggle'
+    'main:vender-toggle',
+    'main:xp'
   ]);
 });
 

@@ -65,6 +65,7 @@ function fakeCommand(commandName, { admin = false, userId = 'u1', values = {}, r
     member: { permissions: { has: () => admin } },
     options: {
       getString: (name) => values[name] ?? null,
+      getInteger: (name) => values[name] ?? null,
       getChannel: (name) => values[name] ?? null
     },
     replies: [],
@@ -452,11 +453,11 @@ test('quien no es admin no puede tocar el panel de precios', async () => {
   assert.equal(readState().guilds[GUILD_ID].prices.channelId, null);
 });
 
-test('un servidor nuevo solo recibe el comando del buscador', async () => {
+test('un servidor nuevo solo recibe los comandos de los buscadores', async () => {
   client.emit(Events.GuildCreate, { id: 'otro-servidor', name: 'Otro' });
   await flush();
   const put = puts.find((p) => p.route.includes('/guilds/otro-servidor/'));
-  assert.deepEqual(put.names, ['config_precios']);
+  assert.deepEqual(put.names, ['config_precios', 'config_xp', 'xp_agregar', 'xp_quitar']);
 });
 
 test('el servidor principal conserva todos sus comandos', async () => {
@@ -676,4 +677,139 @@ test('si no se recrea a tiempo, quita el canal y avisa en el Main', async () => 
   assert.deepEqual(disk.guilds[GUILD_ID].moderation.autoCleanChannels, {});
   assert.deepEqual(disk.pendingChannelRecreates, []);
   assert.ok(sent.some((text) => /Se borró el canal \*\*#charla-banda\*\*/.test(text)), JSON.stringify(sent));
+});
+
+// --- Buscador de XP ---
+
+function setXpChannel(channelId) {
+  const state = readState();
+  state.guilds[GUILD_ID].xp.channelId = channelId;
+  writeState(state);
+}
+
+test('en el canal de XP responde con la XP y lo borra a los 2 minutos', async () => {
+  seedGuild();
+  setXpChannel('c-xp');
+
+  const message = fakeMessage('c-xp', 'revolver');
+  client.emit(Events.MessageCreate, message);
+  await flush();
+  assert.match(message.replies[0].content, /Revolver MK2: \*\*55 XP\*\*/);
+  assert.deepEqual(message.replies[0].allowedMentions.parse, []);
+
+  const pending = readDisk().pendingPriceDeletes;
+  assert.equal(pending.length, 1);
+  assert.deepEqual(pending[0].messageIds, ['pregunta-revolver', 'respuesta-revolver']);
+  assert.ok(pending[0].deleteAt - Date.now() > 110 * 1000);
+});
+
+test('el canal de XP no responde en el de precios ni al reves', async () => {
+  seedGuild();
+  fakePriceSheet();
+  setXpChannel('c-xp');
+  setPriceChannel('c-precios');
+
+  const enPrecios = fakeMessage('c-precios', 'mosquete');
+  client.emit(Events.MessageCreate, enPrecios);
+  await flush();
+  assert.doesNotMatch(enPrecios.replies[0].content, /XP/);
+
+  const fuera = fakeMessage('otro-canal', 'mosquete');
+  client.emit(Events.MessageCreate, fuera);
+  await flush();
+  assert.equal(fuera.replies.length, 0);
+});
+
+test('un admin añade un producto y se puede buscar al momento', async () => {
+  seedGuild();
+  setXpChannel('c-xp');
+
+  const add = fakeCommand('xp_agregar', { admin: true, values: { nombre: 'Rifle de asalto', xp: 150 } });
+  client.emit(Events.InteractionCreate, add);
+  await flush();
+  assert.match(add.replies[0].content, /Añadido \*\*Rifle de asalto\*\* con \*\*150 XP/);
+  assert.equal(readDisk().guilds[GUILD_ID].xp.items.length, 36);
+
+  const message = fakeMessage('c-xp', 'rifle de asalto');
+  client.emit(Events.MessageCreate, message);
+  await flush();
+  assert.match(message.replies[0].content, /Rifle de asalto: \*\*150 XP/);
+
+  const change = fakeCommand('xp_agregar', { admin: true, values: { nombre: 'rifle DE asalto', xp: 160 } });
+  client.emit(Events.InteractionCreate, change);
+  await flush();
+  assert.match(change.replies[0].content, /pasa de \*\*150 XP\*\* a \*\*160 XP/);
+  assert.equal(readDisk().guilds[GUILD_ID].xp.items.length, 36);
+});
+
+test('un admin quita un producto', async () => {
+  seedGuild();
+  const remove = fakeCommand('xp_quitar', { admin: true, values: { nombre: 'Bate' } });
+  client.emit(Events.InteractionCreate, remove);
+  await flush();
+  assert.match(remove.replies[0].content, /Quitado \*\*Bate/);
+  assert.equal(readDisk().guilds[GUILD_ID].xp.items.length, 34);
+
+  const missing = fakeCommand('xp_quitar', { admin: true, values: { nombre: 'machette' } });
+  client.emit(Events.InteractionCreate, missing);
+  await flush();
+  assert.match(missing.replies[0].content, /Querías decir \*\*Machete/);
+});
+
+test('quien no es admin no puede tocar la lista de XP', async () => {
+  seedGuild();
+  for (const [name, values] of [
+    ['xp_agregar', { nombre: 'Algo', xp: 5 }],
+    ['xp_quitar', { nombre: 'Bate' }],
+    ['config_xp', {}]
+  ]) {
+    const interaction = fakeCommand(name, { admin: false, values });
+    client.emit(Events.InteractionCreate, interaction);
+    await flush();
+    assert.match(interaction.replies[0].content, /Solo administradores/, name);
+    assert.equal(registeredCommands.find((c) => c.name === name).default_member_permissions, '8', name);
+  }
+  assert.equal(readState().guilds[GUILD_ID].xp.items, null);
+
+  const select = fakeComponent('xp:channel', { admin: false, select: true, values: ['c-x'] });
+  client.emit(Events.InteractionCreate, select);
+  await flush();
+  assert.match(select.calls.reply[0].content, /Solo administradores/);
+  assert.equal(readState().guilds[GUILD_ID].xp.channelId, null);
+});
+
+test('un admin abre el panel de XP, elige el canal y ve la lista', async () => {
+  seedGuild();
+  const open = fakeComponent('main:xp');
+  client.emit(Events.InteractionCreate, open);
+  await flush();
+  assert.match(open.calls.reply[0].content, /Buscador de XP/);
+  assert.match(open.calls.reply[0].content, /Productos\*\*: 35/);
+
+  const select = fakeComponent('xp:channel', { select: true, values: ['c-xp'] });
+  client.emit(Events.InteractionCreate, select);
+  await flush();
+  assert.equal(readDisk().guilds[GUILD_ID].xp.channelId, 'c-xp');
+
+  const list = fakeComponent('xp:list');
+  client.emit(Events.InteractionCreate, list);
+  await flush();
+  assert.match(list.calls.reply[0].content, /Double Barrel Shotgun: \*\*120 XP/);
+  assert.equal(list.calls.reply[0].ephemeral, true);
+});
+
+test('el canal de XP no puede ser el de precios', async () => {
+  seedGuild();
+  setPriceChannel('c-precios');
+  const select = fakeComponent('xp:channel', { select: true, values: ['c-precios'] });
+  client.emit(Events.InteractionCreate, select);
+  await flush();
+  assert.equal(readState().guilds[GUILD_ID].xp.channelId, null);
+  assert.match(select.calls.update[0].content, /Elige otro/);
+
+  setXpChannel('c-xp');
+  const prices = fakeComponent('prices:channel', { select: true, values: ['c-xp'] });
+  client.emit(Events.InteractionCreate, prices);
+  await flush();
+  assert.equal(readState().guilds[GUILD_ID].prices.channelId, 'c-precios');
 });

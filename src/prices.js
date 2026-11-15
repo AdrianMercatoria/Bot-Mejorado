@@ -321,31 +321,36 @@ function sanitizeQuery(query) {
   return String(query).replace(/[`*_~|>\\]/g, '').replace(/\s+/g, ' ').trim();
 }
 
-function buildSearchReply(items, query) {
+// format, separator y example permiten reutilizarlo en otros buscadores (el de XP).
+function buildSearchReply(
+  items,
+  query,
+  { format = formatItem, separator = '\n\n', example = '`chaleco` o `9mm`' } = {}
+) {
   const shown = sanitizeQuery(query);
   const results = searchItems(items, query);
   if (!results.length) {
     const similar = findSimilarItems(items, query);
     if (similar.length) {
-      return `🔎 No encontré **${shown}** exacto. Lo más parecido:\n\n${similar.map(formatItem).join('\n\n')}`;
+      return `🔎 No encontré **${shown}** exacto. Lo más parecido:\n\n${similar.map(format).join(separator)}`;
     }
-    return `🔎 No encontré nada para **${shown}**. Prueba con otra palabra, por ejemplo \`chaleco\` o \`9mm\`.`;
+    return `🔎 No encontré nada para **${shown}**. Prueba con otra palabra, por ejemplo ${example}.`;
   }
 
   const header = `🔎 **${results.length}** resultado(s) para **${shown}**`;
   const blocks = [];
   let length = header.length;
   for (const item of results.slice(0, MAX_RESULTS)) {
-    const block = formatItem(item);
+    const block = format(item);
     // Se reserva sitio para el aviso de resultados ocultos.
-    if (length + block.length + 2 > DISCORD_MESSAGE_LIMIT - 100) break;
+    if (length + block.length + separator.length > DISCORD_MESSAGE_LIMIT - 100) break;
     blocks.push(block);
-    length += block.length + 2;
+    length += block.length + separator.length;
   }
 
   const hidden = results.length - blocks.length;
   const footer = hidden > 0 ? `\n\n_Y ${hidden} más. Escribe algo más concreto para verlos._` : '';
-  return `${header}\n\n${blocks.join('\n\n')}${footer}`;
+  return `${header}\n\n${blocks.join(separator)}${footer}`;
 }
 
 module.exports = {
@@ -358,6 +363,7 @@ module.exports = {
   parseTabList,
   parseSheetId,
   sheetUrl,
+  normalizeText,
   searchItems,
   findSimilarItems,
   refreshCatalog,

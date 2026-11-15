@@ -38,6 +38,7 @@ function getChannelUses(guildConfig, channelId) {
   if (mod.autoCleanChannels[channelId]) uses.push('limpieza automática');
   if (mod.wordsChannelId === channelId) uses.push('lista de palabras');
   if (guildConfig.prices?.channelId === channelId) uses.push('buscador de precios');
+  if (guildConfig.xp?.channelId === channelId) uses.push('buscador de XP');
   if (guildConfig.moneyReadChannelId === channelId) uses.push('lectura de dinero');
   if (guildConfig.moneyReportChannelId === channelId) uses.push('reporte de dinero');
   return uses;
@@ -59,6 +60,7 @@ function moveChannelUses(guildConfig, oldId, newId) {
   // La lista de palabras se conserva aunque el canal nuevo este vacio.
   if (mod.wordsChannelId === oldId) mod.wordsChannelId = newId;
   if (guildConfig.prices?.channelId === oldId) guildConfig.prices.channelId = newId;
+  if (guildConfig.xp?.channelId === oldId) guildConfig.xp.channelId = newId;
   if (guildConfig.moneyReadChannelId === oldId) guildConfig.moneyReadChannelId = newId;
   if (guildConfig.moneyReportChannelId === oldId) guildConfig.moneyReportChannelId = newId;
 }
