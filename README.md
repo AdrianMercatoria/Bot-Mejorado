@@ -257,6 +257,18 @@ Un canal donde cualquiera escribe lo que busca y el bot responde con nombre, tip
 
 El bot necesita **Gestionar mensajes** en ese canal para borrar las búsquedas.
 
+## Buscador de XP
+
+Otro canal buscador, igual que el de precios, que responde cuánta XP da cada producto: `revolver` lista los tres revólveres con su XP. Busca igual (sin mayúsculas ni acentos, plurales y erratas) y también borra pregunta y respuesta a los 2 minutos.
+
+**Activarlo:** en el Panel de Administración pulsa **XP** (o usa `/config_xp`) y elige el canal. No puede ser el mismo que el de precios. **📋 Ver la lista** enseña todos los productos.
+
+**La lista:** viene cargada con 35 productos. Cada servidor tiene la suya y los administradores la cambian desde Discord:
+- `/xp_agregar nombre:<producto> xp:<cantidad>` añade un producto. Si ya existe, le cambia la XP.
+- `/xp_quitar nombre:<producto>` lo quita. Si el nombre no coincide, sugiere el más parecido.
+
+En otros servidores aparecen estos tres comandos junto a `/config_precios`.
+
 ## Conservar los datos entre actualizaciones
 
 El bot guarda todo (configuracion, cooldowns, historial de reportes) en `state.json`. Hay dos protecciones:

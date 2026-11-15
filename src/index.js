@@ -37,6 +37,7 @@ const {
 } = require('./moderation');
 const webSync = require('./websync');
 const prices = require('./prices');
+const xp = require('./xp');
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
@@ -175,6 +176,27 @@ const commands = [
         .setDescription('Enlace de otra hoja de Google, compartida como publica (opcional)')
     ),
   new SlashCommandBuilder()
+    .setName('config_xp')
+    .setDescription('Configura el buscador de XP: canal y lista de productos')
+    .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator),
+  new SlashCommandBuilder()
+    .setName('xp_agregar')
+    .setDescription('Añade un producto al buscador de XP, o cambia la XP de uno que ya está')
+    .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator)
+    .addStringOption((opt) =>
+      opt.setName('nombre').setDescription('Nombre del producto').setRequired(true).setMaxLength(xp.MAX_NAME_LENGTH)
+    )
+    .addIntegerOption((opt) =>
+      opt.setName('xp').setDescription('XP que da').setRequired(true).setMinValue(0).setMaxValue(xp.MAX_XP)
+    ),
+  new SlashCommandBuilder()
+    .setName('xp_quitar')
+    .setDescription('Quita un producto del buscador de XP')
+    .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator)
+    .addStringOption((opt) =>
+      opt.setName('nombre').setDescription('Nombre del producto').setRequired(true).setMaxLength(xp.MAX_NAME_LENGTH)
+    ),
+  new SlashCommandBuilder()
     .setName('config_cd')
     .setDescription('Configura el cooldown de una tarea (solo administradores)')
     .addStringOption((opt) =>
@@ -245,13 +267,15 @@ async function registerCommands() {
 }
 
 // GUILD_ID es el servidor principal, con todos los comandos. En cualquier otro
-// servidor donde entre el bot solo se ofrece el buscador de precios.
+// servidor donde entre el bot solo se ofrecen los buscadores de precios y de XP.
+const SEARCH_COMMANDS = ['config_precios', 'config_xp', 'xp_agregar', 'xp_quitar'];
+
 async function registerPriceCommandInGuild(guild) {
   if (!GUILD_ID || guild.id === GUILD_ID) return;
-  const body = commands.filter((command) => command.name === 'config_precios');
+  const body = commands.filter((command) => SEARCH_COMMANDS.includes(command.name));
   await rest
     .put(Routes.applicationGuildCommands(CLIENT_ID, guild.id), { body })
-    .then(() => console.log(`[precios] /config_precios disponible en ${guild.name} (${guild.id})`))
+    .then(() => console.log(`[precios] buscadores disponibles en ${guild.name} (${guild.id})`))
     .catch((error) =>
       console.error(`[precios] No se pudo registrar el comando en ${guild.name} (${guild.id}): ${error.message}`)
     );
@@ -327,6 +351,10 @@ function getGuildState(state, guildId) {
 
   if (!state.guilds[guildId].prices || typeof state.guilds[guildId].prices !== 'object') {
     state.guilds[guildId].prices = { channelId: null, sheetId: null };
+  }
+  // items null = la lista de partida de xp.js.
+  if (!state.guilds[guildId].xp || typeof state.guilds[guildId].xp !== 'object') {
+    state.guilds[guildId].xp = { channelId: null, items: null };
   }
 
   ensureGuildPanelState(state.guilds[guildId]);
@@ -549,6 +577,7 @@ function buildAdminPanelPayload(guildId, guildConfig) {
         panelButton('main:stats', 'Estadísticas', ButtonStyle.Primary),
         panelButton('main:moderacion', 'Moderación'),
         panelButton('main:precios', 'Precios'),
+        panelButton('main:xp', 'XP'),
         panelButton('main:canales', 'Canales')
       )
     );
@@ -755,14 +784,57 @@ async function refreshPriceCatalogs() {
   await Promise.all([...sheetIds].map((sheetId) => prices.refreshCatalog(sheetId)));
 }
 
-async function handlePriceSearch(message, guildConfig) {
-  const query = message.content.trim();
-  if (query.length < prices.MIN_QUERY_LENGTH || query.length > prices.MAX_QUERY_LENGTH) return;
+function buildXpPayload(guildConfig, notice = null) {
+  const channelId = guildConfig.xp?.channelId;
+  const items = xp.getXpItems(guildConfig);
 
-  const items = await prices.getItems(getPriceSheetId(guildConfig));
-  const content = items
-    ? prices.buildSearchReply(items, query)
-    : '⚠️ No pude leer la hoja de precios. Inténtalo en un momento.';
+  const lines = ['### ⭐ Buscador de XP'];
+  if (notice) lines.push(notice, '');
+  lines.push(`- **Canal**: ${formatAssignedChannel(channelId)}`);
+  lines.push(`- **Productos**: ${items.length}`);
+  lines.push('');
+  lines.push(
+    channelId
+      ? 'Quien escriba en el canal recibe la XP de lo que busque. Pregunta y respuesta se borran a los 2 minutos.'
+      : '⚠️ Elige un canal para activar el buscador.'
+  );
+  lines.push('Para añadir o cambiar un producto: `/xp_agregar`. Para quitarlo: `/xp_quitar`.');
+
+  return {
+    content: lines.join('\n'),
+    components: [
+      new ActionRowBuilder().addComponents(
+        new ChannelSelectMenuBuilder()
+          .setCustomId('xp:channel')
+          .setPlaceholder('⭐ Canal donde se busca la XP')
+          .addChannelTypes(ChannelType.GuildText)
+          .setMinValues(1)
+          .setMaxValues(1)
+      ),
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('xp:list').setLabel('📋 Ver la lista').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId('xp:clear')
+          .setLabel('Desactivar el buscador')
+          .setStyle(ButtonStyle.Danger)
+          .setDisabled(!channelId)
+      )
+    ],
+    ephemeral: true
+  };
+}
+
+// Canales donde cada mensaje ya tiene otra funcion: ahi no puede ir un buscador.
+function channelTakenFor(guildConfig, channelId, buscador) {
+  const others = [
+    guildConfig.moderation.wordsChannelId,
+    guildConfig.moneyReadChannelId,
+    buscador === 'xp' ? guildConfig.prices?.channelId : guildConfig.xp?.channelId
+  ];
+  return others.includes(channelId);
+}
+
+async function replySearchAndScheduleDelete(message, content) {
   const reply = await message.reply({
     content,
     allowedMentions: { parse: [], repliedUser: false }
@@ -776,6 +848,23 @@ async function handlePriceSearch(message, guildConfig) {
     deleteAt: Date.now() + PRICE_REPLY_TTL_MS
   });
   writeState(state);
+}
+
+async function handlePriceSearch(message, guildConfig) {
+  const query = message.content.trim();
+  if (query.length < prices.MIN_QUERY_LENGTH || query.length > prices.MAX_QUERY_LENGTH) return;
+
+  const items = await prices.getItems(getPriceSheetId(guildConfig));
+  const content = items
+    ? prices.buildSearchReply(items, query)
+    : '⚠️ No pude leer la hoja de precios. Inténtalo en un momento.';
+  await replySearchAndScheduleDelete(message, content);
+}
+
+async function handleXpSearch(message, guildConfig) {
+  const query = message.content.trim();
+  if (query.length < prices.MIN_QUERY_LENGTH || query.length > prices.MAX_QUERY_LENGTH) return;
+  await replySearchAndScheduleDelete(message, xp.buildXpReply(xp.getXpItems(guildConfig), query));
 }
 
 async function processPriceDeletes() {
@@ -2748,6 +2837,11 @@ client.on(Events.MessageCreate, guardListener('mensajes', async (message) => {
     return;
   }
 
+  if (guildConfig.xp.channelId && message.channelId === guildConfig.xp.channelId) {
+    await handleXpSearch(message, guildConfig);
+    return;
+  }
+
   const key = createEvidenceKey(message.guildId, message.author.id);
   const pending = state.pendingEvidence[key];
   const plantKey = createPlantationInputKey(message.guildId, message.author.id);
@@ -3125,6 +3219,52 @@ client.on(Events.InteractionCreate, guardListener('interacciones', async (intera
       return;
     }
 
+    if (['config_xp', 'xp_agregar', 'xp_quitar'].includes(interaction.commandName)) {
+      if (!isAdmin(interaction)) {
+        await interaction.reply({ content: '⛔ Solo administradores pueden usar este comando.', ephemeral: true });
+        return;
+      }
+
+      if (interaction.commandName === 'config_xp') {
+        await interaction.reply(buildXpPayload(guildConfig));
+        return;
+      }
+
+      const nombre = interaction.options.getString('nombre', true);
+      if (interaction.commandName === 'xp_agregar') {
+        const cantidad = interaction.options.getInteger('xp', true);
+        const result = xp.upsertXpItem(guildConfig, nombre, cantidad);
+        if (result.error) {
+          await interaction.reply({ content: result.error, ephemeral: true });
+          return;
+        }
+        writeState(state);
+        const { name } = result.item;
+        await interaction.reply({
+          content: result.added
+            ? `✅ Añadido **${name}** con **${cantidad} XP**.`
+            : `✅ **${name}** ya estaba: pasa de ${xp.formatXp(result.previous)} a **${cantidad} XP**.`,
+          ephemeral: true
+        });
+        return;
+      }
+
+      const { removed, similar } = xp.removeXpItem(guildConfig, nombre);
+      if (!removed) {
+        await interaction.reply({
+          content:
+            'No hay ningún producto con ese nombre.' +
+            (similar.length ? ` ¿Querías decir ${similar.map((name) => `**${name}**`).join(', ')}?` : ''),
+          ephemeral: true,
+          allowedMentions: { parse: [] }
+        });
+        return;
+      }
+      writeState(state);
+      await interaction.reply({ content: `🗑️ Quitado **${removed.name}**.`, ephemeral: true });
+      return;
+    }
+
     if (interaction.commandName === 'config_cd') {
       if (!isAdmin(interaction)) {
         await interaction.reply({
@@ -3191,6 +3331,27 @@ client.on(Events.InteractionCreate, guardListener('interacciones', async (intera
     return;
   }
 
+  if (interaction.isChannelSelectMenu() && interaction.customId === 'xp:channel') {
+    if (!isAdmin(interaction)) {
+      await interaction.reply({ content: '⛔ Solo administradores pueden cambiar este canal.', ephemeral: true });
+      return;
+    }
+    const channelId = interaction.values[0];
+    if (channelTakenFor(guildConfig, channelId, 'xp')) {
+      await interaction.update(
+        buildXpPayload(
+          guildConfig,
+          '⚠️ Ese canal ya se usa para la lista de palabras, las fotos de dinero o el buscador de precios. Elige otro.'
+        )
+      );
+      return;
+    }
+    guildConfig.xp.channelId = channelId;
+    writeState(state);
+    await interaction.update(buildXpPayload(guildConfig));
+    return;
+  }
+
   if (interaction.isChannelSelectMenu() && interaction.customId === 'prices:channel') {
     if (!isAdmin(interaction)) {
       await interaction.reply({ content: '⛔ Solo administradores pueden cambiar este canal.', ephemeral: true });
@@ -3198,10 +3359,12 @@ client.on(Events.InteractionCreate, guardListener('interacciones', async (intera
     }
 
     const channelId = interaction.values[0];
-    // En esos canales cada mensaje ya tiene otra funcion.
-    if (channelId === guildConfig.moderation.wordsChannelId || channelId === guildConfig.moneyReadChannelId) {
+    if (channelTakenFor(guildConfig, channelId, 'precios')) {
       await interaction.update(
-        buildPricesPayload(guildConfig, '⚠️ Ese canal ya se usa para la lista de palabras o las fotos de dinero. Elige otro.')
+        buildPricesPayload(
+          guildConfig,
+          '⚠️ Ese canal ya se usa para la lista de palabras, las fotos de dinero o el buscador de XP. Elige otro.'
+        )
       );
       return;
     }
@@ -3443,6 +3606,27 @@ client.on(Events.InteractionCreate, guardListener('interacciones', async (intera
         await interaction.deferUpdate();
         await prices.refreshCatalog(getPriceSheetId(guildConfig));
         await interaction.editReply(withoutEphemeral(buildPricesPayload(guildConfig)));
+      }
+      return;
+    }
+
+    if (interaction.customId === 'main:xp' || interaction.customId.startsWith('xp:')) {
+      if (!isAdmin(interaction)) {
+        await interaction.reply({ content: '⛔ Solo administradores pueden usar esta accion.', ephemeral: true });
+        return;
+      }
+      if (interaction.customId === 'main:xp') {
+        await interaction.reply(buildXpPayload(guildConfig));
+      } else if (interaction.customId === 'xp:clear') {
+        guildConfig.xp.channelId = null;
+        writeState(state);
+        await interaction.update(buildXpPayload(guildConfig));
+      } else if (interaction.customId === 'xp:list') {
+        await interaction.reply({
+          content: `### ⭐ Lista de XP\n${xp.buildXpList(xp.getXpItems(guildConfig))}`,
+          ephemeral: true,
+          allowedMentions: { parse: [] }
+        });
       }
       return;
     }
